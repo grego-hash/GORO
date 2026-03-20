@@ -16,7 +16,6 @@ a = Analysis(
         (str(project_root / 'dropdown_options.csv'), '.'),
         (str(project_root / 'assets' / 'icons' / 'goro_logo.png'), '.'),
         (str(project_root / 'assets' / 'icons' / 'GORO_LOGO.ico'), '.'),
-        (str(project_root / 'assets' / 'icons' / 'Stockham.ico'), '.'),
     ],
     hiddenimports=[],
     hookspath=[],

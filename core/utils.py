@@ -5,6 +5,7 @@ import platform
 import shutil
 import subprocess
 from datetime import datetime, date
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -17,12 +18,18 @@ from core.constants import BID_STATUSES
 # OS helpers
 # ----------------------------
 
+@lru_cache(maxsize=1)
+def get_system() -> str:
+    """Get the OS system name (cached to avoid repeated WMI queries on Windows)."""
+    return platform.system()
+
+
 def open_in_file_manager(path: Path) -> None:
     """Open a folder in the OS file explorer."""
     try:
-        if platform.system() == "Windows":
+        if get_system() == "Windows":
             os.startfile(path)  # type: ignore[attr-defined]
-        elif platform.system() == "Darwin":
+        elif get_system() == "Darwin":
             subprocess.Popen(["open", str(path)])
         else:
             subprocess.Popen(["xdg-open", str(path)])
@@ -45,7 +52,7 @@ def invalid_name_reason(name: str) -> Optional[str]:
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
-    if platform.system() == "Windows" and name.upper() in reserved:
+    if get_system() == "Windows" and name.upper() in reserved:
         return f"{name} is reserved on Windows."
     return None
 
@@ -61,7 +68,7 @@ def sanitize_name(name: str) -> str:
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
-    if platform.system() == "Windows" and sanitized.upper() in reserved:
+    if get_system() == "Windows" and sanitized.upper() in reserved:
         sanitized += "_bid"
     return sanitized or "bid"
 

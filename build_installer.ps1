@@ -13,6 +13,45 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $projectRoot
 
+function Assert-GitWorkingDirectoryClean {
+    <#
+    .SYNOPSIS
+    Commits and pushes any uncommitted changes before building.
+    #>
+    try {
+        $gitStatus = & git status --porcelain 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "⚠️  WARNING: Could not verify git status. Proceeding anyway..." -ForegroundColor Yellow
+            return
+        }
+
+        if ($gitStatus) {
+            Write-Host ""
+            Write-Host "[git] Uncommitted changes detected. Committing and pushing before build..." -ForegroundColor Cyan
+            Write-Host $gitStatus
+
+            & git add .
+            if ($LASTEXITCODE -ne 0) { throw "git add failed." }
+
+            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm"
+            & git commit -m "chore: pre-build commit ($timestamp)"
+            if ($LASTEXITCODE -ne 0) { throw "git commit failed." }
+
+            & git push
+            if ($LASTEXITCODE -ne 0) { throw "git push failed. Resolve conflicts manually and retry." }
+
+            Write-Host "[git] Pre-build commit pushed successfully." -ForegroundColor Green
+            Write-Host ""
+        } else {
+            Write-Host "[git] Working directory is clean." -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "⚠️  WARNING: Pre-build git commit failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "    Proceeding with build. Push manually after the build completes." -ForegroundColor Yellow
+        Write-Host ""
+    }
+}
+
 function Test-AppVersionFormat {
     param(
         [string]$Version
@@ -48,6 +87,9 @@ function Get-NextAppVersion {
 
     return "$major.$minor.$patch"
 }
+
+# ===== PRE-BUILD CHECKS =====
+Assert-GitWorkingDirectoryClean
 
 $constantsPath = Join-Path $projectRoot "core\constants.py"
 if (-not (Test-Path $constantsPath)) {

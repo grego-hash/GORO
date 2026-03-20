@@ -6,7 +6,6 @@ import io
 import re
 import json
 import os
-import platform
 import shutil
 import stat
 import subprocess
@@ -36,16 +35,23 @@ from core.constants import ORG_NAME, APP_NAME, APP_ID, APP_DISPLAY_NAME, DEFAULT
 from core.utils import (
     open_in_file_manager, invalid_name_reason, sanitize_name, human_bytes, dir_size,
     materialize_template, next_increment_name, parse_due_date, status_index,
-    available_copy_name, copy_template
+    available_copy_name, copy_template, get_system
 )
-from core.models import Paths, get_paths, ensure_dirs, list_bids, list_projects, read_info, write_info, now_iso
+from core.models import Paths, get_paths, ensure_dirs, list_bids, list_projects, read_info, write_info, now_iso, default_data_root
+from core.offline import (
+    apply_offline_changes,
+    clear_offline_flag,
+    create_offline_copy,
+    detect_offline_changes,
+    get_affected_workbooks,
+)
 from ui.dialogs import CreateBidDialog, EditDueDateDialog, PreferencesDialog, VendorQuoteDialog, LaborSettingsDialog
 from ui.pdf_widgets import PagePreviewWidget, TableSelectionWidget, ImageRegionSelection, PDFConversionWorker
 from core.milestones import (
     create_milestone, list_milestones, delete_milestone, revert_to_milestone, 
     copy_milestone_to_new_workbook, compare_workbooks
 )
-from ui.milestone_dialogs import CreateMilestoneDialog, ManageMilestonesDialog, MilestoneCompareDialog
+from ui.milestone_dialogs import CreateMilestoneDialog, ManageMilestonesDialog, MilestoneCompareDialog, ReturnOfflineCopyDialog
 from core.email_utils import (
     launch_outlook_with_pdf, load_vendor_contacts, get_vendor_list_from_table, 
     filter_table_by_vendor
@@ -95,6 +101,8 @@ from ui.main_window_combined_hardware_widget import (
     AdminMiscSelectionWidget,
     AlternatesSelectionWidget,
     AlternatesWidget,
+    ChangeOrdersSelectionWidget,
+    ChangeOrdersWidget,
     CombinedHardwareWidget,
 )
 from ui.main_window_hw_groups import build_hw_groups_data_from_csv, write_hardware_groups_pdf
@@ -1283,11 +1291,81 @@ class MainWindow(QMainWindow):
                 "Please enter a valid contract amount greater than zero.",
             )
 
+    def _default_change_order_markup_pct(self) -> float:
+        return 15.0
+
+    def _current_username(self) -> str:
+        username = str(self.settings.value("username", "") or "").strip()
+        return username or "Unknown User"
+
+    def _get_project_change_order_markup_config(
+        self,
+        parent_path: Path,
+        info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        info_obj = info if info is not None else self._read_parent_info_cached(parent_path)
+        default_rate = self._default_change_order_markup_pct()
+        raw_rate = info_obj.get("co_markup_rate_pct", default_rate)
+        try:
+            rate_pct = float(raw_rate)
+        except Exception:
+            parsed = self._parse_financials_number(str(raw_rate))
+            rate_pct = float(parsed) if parsed > 0 else default_rate
+        if rate_pct < 0:
+            rate_pct = default_rate
+
+        verified = bool(info_obj.get("co_markup_verified", False))
+        return {
+            "rate_pct": rate_pct,
+            "verified": verified,
+            "verified_at": str(info_obj.get("co_markup_verified_at", "") or "").strip(),
+            "verified_by": str(info_obj.get("co_markup_verified_by", "") or "").strip(),
+        }
+
+    def _prompt_project_change_order_markup_for_promotion(self) -> Dict[str, Any]:
+        default_rate = self._default_change_order_markup_pct()
+        rate_pct, ok = QInputDialog.getDouble(
+            self,
+            "Change Order Markup",
+            "Enter contract change order markup (%):\n"
+            "Use 15% when contract markup is not available yet.",
+            default_rate,
+            0.0,
+            100.0,
+            3,
+        )
+        if not ok:
+            return {
+                "rate_pct": default_rate,
+                "verified": False,
+                "verified_at": "",
+                "verified_by": "",
+            }
+
+        verify_reply = QMessageBox.question(
+            self,
+            "Change Order Markup",
+            "Is this markup verified by contract?\n"
+            "Choose Yes if contract-verified, or No if provisional.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        verified = verify_reply == QMessageBox.StandardButton.Yes
+        return {
+            "rate_pct": float(rate_pct),
+            "verified": verified,
+            "verified_at": now_iso() if verified else "",
+            "verified_by": self._current_username() if verified else "",
+        }
+
     def _project_locked_financials_path(self, parent_path: Path) -> Path:
         return parent_path / "Locked_Financials.csv"
 
     def _project_change_order_log_path(self, parent_path: Path) -> Path:
         return parent_path / "Change_Order_Log.csv"
+
+    def _project_change_order_storage_path(self, parent_path: Path) -> Path:
+        return parent_path / "Project_Change_Orders"
 
     def _ensure_project_change_order_log(self, parent_path: Path) -> Path:
         log_path = self._project_change_order_log_path(parent_path)
@@ -1300,6 +1378,15 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return log_path
+
+    def _ensure_project_change_order_storage(self, parent_path: Path) -> Path:
+        storage_path = self._project_change_order_storage_path(parent_path)
+        try:
+            storage_path.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        self._ensure_change_orders_csvs(storage_path)
+        return storage_path
 
     def _format_financials_eval_number(self, value: float) -> str:
         if abs(value - round(value)) < 1e-9:
@@ -1615,6 +1702,11 @@ class MainWindow(QMainWindow):
             return False
 
         info["contract_amount"] = float(locked_amount)
+        co_markup = self._prompt_project_change_order_markup_for_promotion()
+        info["co_markup_rate_pct"] = float(co_markup.get("rate_pct", self._default_change_order_markup_pct()))
+        info["co_markup_verified"] = bool(co_markup.get("verified", False))
+        info["co_markup_verified_at"] = str(co_markup.get("verified_at", "") or "")
+        info["co_markup_verified_by"] = str(co_markup.get("verified_by", "") or "")
         info.pop("manual_bid_total", None)
         self._capture_locked_project_financials(bid_path, info)
         write_info(bid_path, info)
@@ -3107,6 +3199,53 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _is_project_workbook(self, workbook_path: Path) -> bool:
+        try:
+            parent_info = read_info(workbook_path.parent.parent)
+        except Exception:
+            return False
+
+        parent_type = str(parent_info.get("type", "") or "").strip().lower()
+        if parent_type == "project":
+            return True
+        return bool(str(parent_info.get("promoted_at", "") or "").strip())
+
+    def _project_parent_for_workbook(self, workbook_path: Path) -> Optional[Path]:
+        try:
+            candidate = workbook_path.parent.parent
+        except Exception:
+            return None
+        if not candidate.exists() or not candidate.is_dir():
+            return None
+        try:
+            parent_info = read_info(candidate)
+        except Exception:
+            return None
+
+        parent_type = str(parent_info.get("type", "") or "").strip().lower()
+        if parent_type == "project" or bool(str(parent_info.get("promoted_at", "") or "").strip()):
+            return candidate
+        return None
+
+    def _ensure_change_orders_csvs(self, workbook_path: Path) -> None:
+        change_orders_files = {
+            "Change_Orders.csv": [["Change Order Number", "Opening #", "Door Type", "Frame Type", "Hardware Group", "Add/Deduct"]],
+            "Change_Orders_Costs.csv": [["Change Order Number", "Description", "Count", "Material per Unit", "Hours per Unit", "Add/Deduct"]],
+            "Change_Orders_Subcontractor.csv": [["Change Order Number", "Description", "Cost", "Add/Deduct"]],
+            "Change_Orders_Details.csv": [["Change Order Number", "Description", "Delivery Hours", "OT Hours", "Sub OH & P", "Include Parking", "Include Supervision"]],
+        }
+
+        for file_name, rows in change_orders_files.items():
+            file_path = workbook_path / file_name
+            if file_path.exists():
+                continue
+            try:
+                with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.writer(f)
+                    writer.writerows(rows)
+            except Exception:
+                pass
+
     def _ensure_proposal_tab_migration(self) -> None:
         if self.settings.value("proposal_tab_migrated", False, type=bool):
             return
@@ -3880,6 +4019,19 @@ class MainWindow(QMainWindow):
         self.act_duplicate.triggered.connect(self.duplicate_item)
         tb.addAction(self.act_duplicate)
 
+        # Offline copy actions (context menu only — not added to toolbar)
+        self.act_save_offline = QAction(QIcon.fromTheme("document-save"), "Save Offline Copy…", self)
+        self.act_save_offline.setStatusTip("Save a local offline working copy of this record")
+        self.act_save_offline.triggered.connect(lambda: self._create_record_offline_copy(self.selected_path()))
+
+        self.act_return_offline = QAction(QIcon.fromTheme("document-revert"), "Return Offline Copy…", self)
+        self.act_return_offline.setStatusTip("Review and apply changes from the offline copy")
+        self.act_return_offline.triggered.connect(lambda: self._return_record_offline_copy(self.selected_path()))
+
+        self.act_clear_offline_flag = QAction(QIcon.fromTheme("edit-clear"), "Clear Offline Flag…", self)
+        self.act_clear_offline_flag.setStatusTip("Remove the offline checkout flag without applying changes")
+        self.act_clear_offline_flag.triggered.connect(lambda: self._clear_record_offline_flag(self.selected_path()))
+
         # Bid-only actions (toolbar)
         self.act_change_status = QAction(QIcon.fromTheme("emblem-important"), "Change Status…", self)
         self.act_change_status.triggered.connect(self.change_status)
@@ -4579,6 +4731,8 @@ class MainWindow(QMainWindow):
         self._project_view_dirty: Dict[str, bool] = {}
         self._project_change_order_table: Optional[QTableWidget] = None
         self._project_change_order_path: Optional[Path] = None
+        self._project_co_markup_label: Optional[QLabel] = None
+        self._project_co_markup_button: Optional[QPushButton] = None
         self._project_detail_prev_tab_index: int = 0
         self.project_details_views.addTab(main_details_tab, "Main")
         self.project_details_views.addTab(
@@ -5505,6 +5659,8 @@ class MainWindow(QMainWindow):
                     "bid_rel_path": str(note.get("bid_rel_path", "")).strip(),
                     "created_at": str(note.get("created_at", "")),
                     "file_path": str(note.get("file_path", "")).strip(),
+                    "protected": bool(note.get("protected", False)),
+                    "system_tag": str(note.get("system_tag", "")).strip(),
                 })
             return normalized
         except Exception:
@@ -5557,6 +5713,390 @@ class MainWindow(QMainWindow):
             "created_at": now_iso(),
         })
         self._save_notes(notes)
+
+    def _append_project_co_markup_change_note(
+        self,
+        parent_path: Path,
+        old_rate_pct: float,
+        new_rate_pct: float,
+        reason: str,
+    ) -> None:
+        note_scope, record_rel = self._get_record_scope_and_rel_for_notes(parent_path)
+        if not record_rel:
+            return
+
+        actor = self._current_username()
+        timestamp_text = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        reason_text = reason.strip() or "No reason provided"
+        content_lines = [
+            f"[{timestamp_text}] Verified contract change-order markup was changed.",
+            f"User: {actor}",
+            f"Previous Markup: {old_rate_pct:.3f}%",
+            f"New Markup: {new_rate_pct:.3f}%",
+            f"Reason: {reason_text}",
+        ]
+
+        notes = self._load_notes()
+        notes.append({
+            "id": str(uuid.uuid4()),
+            "type": "Communication",
+            "subject": "Change Order Markup Rate Updated",
+            "content": "\n".join(content_lines),
+            "direction": "From",
+            "contact": "System",
+            "pinned": False,
+            "file_path": "",
+            "scope": note_scope,
+            "record_rel_path": record_rel,
+            "bid_rel_path": record_rel if note_scope == "bid" else "",
+            "created_at": now_iso(),
+            "protected": True,
+            "system_tag": "co_markup_audit",
+        })
+        self._save_notes(notes)
+
+    # ------------------------------------------------------------------
+    # Offline working copy — audit notes + lifecycle actions
+    # ------------------------------------------------------------------
+
+    def _append_offline_audit_note(self, record_path: Path, subject: str, message: str) -> None:
+        """Append a protected, system-tagged Communication note for offline lifecycle events."""
+        note_scope, record_rel = self._path_scope_and_rel(record_path)
+        if not record_rel:
+            return
+        actor = self._current_username()
+        timestamp_text = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        notes = self._load_notes()
+        notes.append({
+            "id": str(uuid.uuid4()),
+            "type": "Communication",
+            "subject": subject,
+            "content": f"[{timestamp_text}] {message}\nUser: {actor}",
+            "direction": "From",
+            "contact": "System",
+            "pinned": False,
+            "file_path": "",
+            "scope": note_scope,
+            "record_rel_path": record_rel,
+            "bid_rel_path": record_rel if note_scope == "bid" else "",
+            "created_at": now_iso(),
+            "protected": True,
+            "system_tag": "offline_audit",
+        })
+        self._save_notes(notes)
+
+    def _create_record_offline_copy(self, record_path: Path) -> None:
+        """Save an offline working copy of the selected bid/project to the local data folder."""
+        if not record_path or not record_path.exists():
+            return
+
+        info = read_info(record_path)
+        if info.get("offline_checkout_active"):
+            existing = str(info.get("offline_checkout_local_path", ""))
+            QMessageBox.information(
+                self,
+                "Offline Copy Already Active",
+                f"An offline copy of this record is already active.\n\nLocal path: {existing}\n\n"
+                "Return or clear the existing offline copy before creating a new one.",
+            )
+            return
+
+        local_root = default_data_root()
+        user = self._current_username() or "Unknown"
+        record_name = record_path.name
+
+        reply = QMessageBox.question(
+            self,
+            "Save Offline Copy",
+            f"Create an offline working copy of '{record_name}'?\n\n"
+            f"The copy will be saved to:\n{local_root / 'offline_copies'}\n\n"
+            "A baseline snapshot is taken automatically so GORO can detect exactly "
+            "what you changed when you return it.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            local_copy_path, _started_at = create_offline_copy(record_path, local_root, user)
+        except Exception as exc:
+            QMessageBox.critical(self, "Offline Copy Error", f"Could not create offline copy:\n{exc}")
+            return
+
+        self._append_offline_audit_note(
+            record_path,
+            "Offline Copy Created",
+            f"Offline copy created at: {local_copy_path}",
+        )
+
+        QMessageBox.information(
+            self,
+            "Offline Copy Created",
+            f"Offline copy saved to:\n{local_copy_path}\n\n"
+            "When you're back online, right-click the record and choose "
+            "'Return Offline Copy\u2026' to review and apply your changes.",
+        )
+
+    def _return_record_offline_copy(self, record_path: Path) -> None:
+        """Return an offline copy: review changes, optionally apply them with a milestone backup."""
+        if not record_path or not record_path.exists():
+            return
+
+        info = read_info(record_path)
+        local_path_str = str(info.get("offline_checkout_local_path", "")).strip()
+        if not local_path_str:
+            QMessageBox.warning(self, "Return Offline Copy", "No local path found for the offline copy.")
+            return
+
+        local_path = Path(local_path_str)
+        if not local_path.exists():
+            reply = QMessageBox.question(
+                self,
+                "Return Offline Copy",
+                f"The offline copy folder was not found:\n{local_path}\n\nClear the offline flag anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                clear_offline_flag(record_path)
+                self._append_offline_audit_note(
+                    record_path,
+                    "Offline Flag Cleared",
+                    "Offline copy folder not found — flag cleared automatically.",
+                )
+            return
+
+        changes = detect_offline_changes(local_path)
+        local_info = read_info(local_path)
+
+        owner = _resolve_transient_parent(self)
+        dlg = ReturnOfflineCopyDialog(changes, local_info, parent=owner)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        # --- Discard or no changes ---
+        if dlg.choice == ReturnOfflineCopyDialog.CHOICE_DISCARD or not dlg.has_changes():
+            action_label = "no changes detected" if not dlg.has_changes() else "user discarded all changes"
+            clear_offline_flag(record_path)
+            self._append_offline_audit_note(
+                record_path,
+                "Offline Copy Returned — No Changes Applied",
+                f"Offline copy returned ({action_label}). No files were changed in the live record.\n"
+                f"Local copy: {local_path}",
+            )
+            self.refresh_list()
+            QMessageBox.information(self, "Offline Copy Returned", "Offline flag cleared. No changes were applied.")
+            return
+
+        # --- Apply path: prompt for a milestone name first ---
+        milestone_dlg = CreateMilestoneDialog(owner)
+        milestone_dlg.setWindowTitle("Create Safety Milestone Before Applying Changes")
+        # Pre-fill the name field with a sensible default
+        milestone_dlg.name_edit.setText(f"Pre-offline-merge {datetime.now().strftime('%Y-%m-%d')}")
+        milestone_dlg.desc_edit.setPlainText(
+            f"Safety snapshot created before merging offline changes from {local_path.name}."
+        )
+        if milestone_dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        milestone_name, milestone_desc = milestone_dlg.get_data()
+        if not milestone_name:
+            QMessageBox.warning(self, "Milestone Required", "Please enter a milestone name to continue.")
+            return
+
+        # Create milestone for each affected live workbook
+        affected_wbs = get_affected_workbooks(record_path, changes)
+        if not affected_wbs:
+            # No specific 4.Workbooks changes — snapshot all workbooks as a safety net
+            wb_root = record_path / "4.Workbooks"
+            if wb_root.exists():
+                affected_wbs = [p for p in wb_root.iterdir() if p.is_dir() and not p.name.startswith(".")]
+
+        milestone_errors: List[str] = []
+        for wb_path in affected_wbs:
+            ok = create_milestone(
+                wb_path,
+                milestone_name,
+                milestone_desc or "Pre-offline-merge safety snapshot",
+            )
+            if not ok:
+                milestone_errors.append(wb_path.name)
+
+        if milestone_errors:
+            QMessageBox.warning(
+                self,
+                "Milestone Warning",
+                f"Could not create milestone for: {', '.join(milestone_errors)}\n"
+                "Proceeding with the merge anyway.",
+            )
+
+        # Copy changed files from offline copy → live record
+        try:
+            copied = apply_offline_changes(local_path, record_path, changes)
+        except Exception as exc:
+            QMessageBox.critical(self, "Merge Error", f"Error applying offline changes:\n{exc}")
+            return
+
+        clear_offline_flag(record_path)
+
+        mod_count = len(changes.get("modified", []))
+        add_count = len(changes.get("added", []))
+        self._append_offline_audit_note(
+            record_path,
+            "Offline Changes Applied",
+            f"Offline copy merged into live record.\n"
+            f"Files modified: {mod_count}, Files added: {add_count}\n"
+            f"Safety milestone created: '{milestone_name}'\n"
+            f"Local copy: {local_path}",
+        )
+
+        self.refresh_list()
+        QMessageBox.information(
+            self,
+            "Changes Applied",
+            f"Offline changes merged successfully.\n\n"
+            f"Files copied: {copied}\n"
+            f"Safety milestone '{milestone_name}' was created — use Manage Milestones to roll back if needed.",
+        )
+
+    def _clear_record_offline_flag(self, record_path: Path) -> None:
+        """Clear the offline checkout flag without applying any changes."""
+        if not record_path or not record_path.exists():
+            return
+
+        info = read_info(record_path)
+        local_path_str = str(info.get("offline_checkout_local_path", "")).strip()
+        user = str(info.get("offline_checkout_user", "")).strip()
+        started = str(info.get("offline_checkout_started_at", ""))[:10]
+
+        msg = "Clear the offline flag for this record?"
+        if user or started:
+            msg += f"\n\nChecked out by: {user or 'Unknown'}\nDate: {started or 'Unknown'}"
+
+        if local_path_str:
+            local_path = Path(local_path_str)
+            if local_path.exists():
+                changes = detect_offline_changes(local_path)
+                total = len(changes.get("modified", [])) + len(changes.get("added", []))
+                if total > 0:
+                    msg += (
+                        f"\n\n\u26A0  {total} uncommitted change(s) detected in the local copy.\n"
+                        "Clearing the flag will NOT apply those changes.\n"
+                        "Use 'Return Offline Copy\u2026' to apply them first."
+                    )
+
+        reply = QMessageBox.question(
+            self,
+            "Clear Offline Flag",
+            msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        clear_offline_flag(record_path)
+        self._append_offline_audit_note(
+            record_path,
+            "Offline Flag Cleared",
+            f"Offline flag cleared manually. Changes from local copy (if any) were not applied.\n"
+            f"Local copy: {local_path_str}",
+        )
+        self.refresh_list()
+        QMessageBox.information(self, "Offline Flag Cleared", "The offline checkout flag has been removed.")
+
+    def _set_project_change_order_markup(self, parent_path: Path) -> None:
+        if not parent_path or not parent_path.exists():
+            return
+
+        info = self._read_parent_info_cached(parent_path)
+        cfg = self._get_project_change_order_markup_config(parent_path, info=info)
+        current_rate = float(cfg["rate_pct"])
+        is_verified = bool(cfg["verified"])
+
+        if is_verified:
+            reason, reason_ok = QInputDialog.getText(
+                self,
+                "Override Verified CO Markup",
+                "This markup is contract-verified and locked.\n"
+                "Enter why it must be changed:",
+            )
+            if not reason_ok:
+                return
+            if not str(reason).strip():
+                QMessageBox.warning(self, "Override Verified CO Markup", "A reason is required to change a verified markup rate.")
+                return
+            new_rate, ok = QInputDialog.getDouble(
+                self,
+                "Override Verified CO Markup",
+                "Enter updated verified markup (%):",
+                current_rate,
+                0.0,
+                100.0,
+                3,
+            )
+            if not ok:
+                return
+            if abs(new_rate - current_rate) < 1e-9:
+                return
+
+            info["co_markup_rate_pct"] = float(new_rate)
+            info["co_markup_verified"] = True
+            info["co_markup_verified_at"] = now_iso()
+            info["co_markup_verified_by"] = self._current_username()
+            write_info(parent_path, info)
+            self._parent_info_cache.pop(str(parent_path), None)
+            self._append_project_co_markup_change_note(parent_path, current_rate, float(new_rate), str(reason))
+            self._refresh_project_change_order_markup_ui()
+            return
+
+        new_rate, ok = QInputDialog.getDouble(
+            self,
+            "Set Change Order Markup",
+            "Enter contract change order markup (%):",
+            current_rate,
+            0.0,
+            100.0,
+            3,
+        )
+        if not ok:
+            return
+        verify_reply = QMessageBox.question(
+            self,
+            "Set Change Order Markup",
+            "Mark this rate as verified by contract?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        verified = verify_reply == QMessageBox.StandardButton.Yes
+
+        info["co_markup_rate_pct"] = float(new_rate)
+        info["co_markup_verified"] = verified
+        info["co_markup_verified_at"] = now_iso() if verified else ""
+        info["co_markup_verified_by"] = self._current_username() if verified else ""
+        write_info(parent_path, info)
+        self._parent_info_cache.pop(str(parent_path), None)
+        self._refresh_project_change_order_markup_ui()
+
+    def _refresh_project_change_order_markup_ui(self) -> None:
+        label = getattr(self, "_project_co_markup_label", None)
+        button = getattr(self, "_project_co_markup_button", None)
+        if label is None or button is None:
+            return
+
+        parent_path = self._selected_parent_for_project_views()
+        if not parent_path:
+            label.setText("CO Markup: -")
+            button.setEnabled(False)
+            return
+
+        cfg = self._get_project_change_order_markup_config(parent_path)
+        rate_pct = float(cfg["rate_pct"])
+        is_verified = bool(cfg["verified"])
+        status_text = "Verified" if is_verified else "Unverified (Default when unknown)"
+        label.setText(f"CO Markup: {rate_pct:.3f}%  |  {status_text}")
+        button.setText("Override Verified Markup" if is_verified else "Set / Verify Markup")
+        button.setEnabled(True)
 
     def _refresh_project_notes_panel(self) -> None:
         if not hasattr(self, "project_notes_list"):
@@ -5772,6 +6312,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Notes", "Note not found.")
             self._refresh_project_notes_panel()
             return
+        if bool(notes[idx].get("protected", False)):
+            QMessageBox.information(self, "Notes", "This system audit note is locked and cannot be edited.")
+            return
         updated = self._open_note_editor(existing_note=notes[idx])
         if not updated:
             return
@@ -5796,6 +6339,10 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         notes = self._load_notes()
+        target_note = next((n for n in notes if str(n.get("id", "")) == note_id), None)
+        if target_note and bool(target_note.get("protected", False)):
+            QMessageBox.information(self, "Notes", "This system audit note is locked and cannot be deleted.")
+            return
         notes = [n for n in notes if str(n.get("id", "")) != note_id]
         self._save_notes(notes)
 
@@ -7699,6 +8246,18 @@ class MainWindow(QMainWindow):
                     info = self._read_parent_info_cached(actual_path)
                     append_bid_row(actual_path, p.name, info, fallback_status="Awarded")
 
+            # Projects promoted from awarded bids — show in the Awarded column
+            if self.paths.projects.exists():
+                for p in sorted(self.paths.projects.iterdir()):
+                    if not p.is_dir() or p.name.startswith('.'):
+                        continue
+                    info = self._read_parent_info_cached(p)
+                    if not str(info.get("promoted_at", "")).strip():
+                        continue
+                    promoted_info = dict(info)
+                    promoted_info["status"] = "Awarded"
+                    append_bid_row(p, p.name, promoted_info, fallback_status="Awarded")
+
             # Sorting
             asc = self.sort_ascending
             field = self.sort_field
@@ -8030,6 +8589,21 @@ class MainWindow(QMainWindow):
         menu.addAction(self.act_duplicate)
         menu.addAction(self.act_rename)
         menu.addAction(self.act_delete)
+
+        # Offline copy sub-menu
+        menu.addSeparator()
+        path = self.selected_path()
+        offline_active = False
+        if path:
+            info = self._read_parent_info_cached(path)
+            offline_active = bool(info.get("offline_checkout_active", False))
+        offline_menu = menu.addMenu("Offline Copy")
+        if not offline_active:
+            offline_menu.addAction(self.act_save_offline)
+        if offline_active:
+            offline_menu.addAction(self.act_return_offline)
+            offline_menu.addAction(self.act_clear_offline_flag)
+
         menu.exec(global_pos)
 
     # ---------- Details & actions ----------
@@ -8318,16 +8892,15 @@ class MainWindow(QMainWindow):
                 
                 co_table = QTableWidget()
                 co_table.setAlternatingRowColors(True)
-                co_table.setEditTriggers(
-                    QAbstractItemView.EditTrigger.DoubleClicked
-                    | QAbstractItemView.EditTrigger.EditKeyPressed
-                    | QAbstractItemView.EditTrigger.AnyKeyPressed
-                )
+                co_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                co_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+                co_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
                 co_table.setColumnCount(5)
                 co_table.setHorizontalHeaderLabels(["Date", "Description", "Amount", "Approved By", "Notes"])
                 co_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
                 co_table.verticalHeader().setVisible(False)
                 co_table.setMinimumHeight(180)
+                co_table.itemDoubleClicked.connect(lambda _item: self._open_selected_project_change_order())
                 self._project_change_order_table = co_table
 
                 co_btn_row = QHBoxLayout()
@@ -8338,22 +8911,35 @@ class MainWindow(QMainWindow):
                 co_reload.clicked.connect(self._load_project_change_order_log)
                 co_btn_row.addWidget(co_reload)
 
-                co_add = QPushButton("Add Row")
+                co_add = QPushButton("New Change Order")
                 co_add.clicked.connect(self._add_project_change_order_row)
                 co_btn_row.addWidget(co_add)
 
-                co_delete = QPushButton("Delete Row")
+                co_open = QPushButton("Open Selected")
+                co_open.clicked.connect(self._open_selected_project_change_order)
+                co_btn_row.addWidget(co_open)
+
+                co_delete = QPushButton("Delete Selected")
                 co_delete.clicked.connect(self._delete_project_change_order_row)
                 co_btn_row.addWidget(co_delete)
-
-                co_save = QPushButton("Save Log")
-                co_save.setObjectName("primaryButton")
-                co_save.clicked.connect(self._save_project_change_order_log)
-                co_btn_row.addWidget(co_save)
                 co_btn_row.addStretch(1)
 
                 co_layout.addLayout(co_btn_row)
                 co_layout.addWidget(co_table, 1)
+
+                co_markup_row = QHBoxLayout()
+                co_markup_row.setContentsMargins(0, 0, 0, 0)
+                self._project_co_markup_label = QLabel("CO Markup: -")
+                self._project_co_markup_label.setStyleSheet("font-weight: bold;")
+                co_markup_row.addWidget(self._project_co_markup_label)
+
+                self._project_co_markup_button = QPushButton("Set / Verify Markup")
+                self._project_co_markup_button.clicked.connect(
+                    lambda: self._set_project_change_order_markup(self._selected_parent_for_project_views())
+                )
+                co_markup_row.addWidget(self._project_co_markup_button)
+                co_markup_row.addStretch(1)
+                co_layout.addLayout(co_markup_row)
                 
                 # Total Change Orders display
                 co_total_row = QHBoxLayout()
@@ -8405,6 +8991,7 @@ class MainWindow(QMainWindow):
                 self._project_change_order_table.clearContents()
                 self._project_change_order_table.setRowCount(0)
                 self._project_change_order_table.blockSignals(False)
+            self._refresh_project_change_order_markup_ui()
 
     def _resolve_project_view_csv_path(self, view_key: str) -> Optional[Path]:
         parent_path = self._selected_parent_for_project_views()
@@ -8500,6 +9087,7 @@ class MainWindow(QMainWindow):
                 table.setColumnWidth(total_col_idx, 170)
             
             self._load_project_change_order_log()
+            self._refresh_project_change_order_markup_ui()
 
     def _save_project_detail_table(self, view_key: str) -> None:
         table = getattr(self, "_project_view_tables", {}).get(view_key)
@@ -8547,88 +9135,357 @@ class MainWindow(QMainWindow):
             return None
         return self._ensure_project_change_order_log(parent_path)
 
+    def _next_project_change_order_number(self, storage_path: Path) -> str:
+        existing_numbers: set[str] = set()
+        for file_name in (
+            "Change_Orders.csv",
+            "Change_Orders_Costs.csv",
+            "Change_Orders_Subcontractor.csv",
+            "Change_Orders_Details.csv",
+        ):
+            file_path = storage_path / file_name
+            headers, rows = self._read_csv_table(file_path)
+            if not headers:
+                continue
+            for row in rows:
+                if not row:
+                    continue
+                number = str(row[0] or "").strip()
+                if number:
+                    existing_numbers.add(number)
+
+        numeric_values = [int(value) for value in existing_numbers if value.isdigit()]
+        if numeric_values:
+            return str(max(numeric_values) + 1)
+        return "1"
+
+    def _load_change_order_summary_rows(
+        self,
+        source_workbook: Path,
+        storage_path: Path,
+        source_kind: str,
+        source_label: str,
+        ohp_rate_override: Optional[float] = None,
+    ) -> List[Dict[str, str]]:
+        schedule_headers, schedule_rows = self._read_csv_table(source_workbook / "Schedule.csv")
+        if not schedule_headers:
+            return []
+
+        widget = ChangeOrdersWidget(
+            source_workbook,
+            (schedule_headers, schedule_rows),
+            parent=None,
+            change_callback=None,
+            storage_path=storage_path,
+            ohp_rate_override=ohp_rate_override,
+        )
+
+        summaries: List[Dict[str, str]] = []
+        try:
+            all_numbers = (
+                set(widget.alternates_openings_data.keys())
+                | set(widget.alternates_costs_data.keys())
+                | set(widget.alternates_subcontractor_data.keys())
+                | set(widget.alternates_details_data.keys())
+            )
+
+            def sort_key(value: str) -> tuple[int, int, str]:
+                txt = (value or "").strip()
+                if txt.isdigit():
+                    return (0, int(txt), txt)
+                return (1, 0, txt.lower())
+
+            for change_order_number in sorted(all_numbers, key=sort_key):
+                widget.current_alternate = change_order_number
+                widget.load_alternate_costs()
+                widget.load_alternate_subcontractor()
+                widget.load_alternate_details()
+                widget._recalculate_current_alternate_sell()
+
+                details = widget.alternates_details_data.get(change_order_number, {})
+                description = str(details.get("description", "") or "").strip()
+                amount_text = widget.total_sell_value_label.text().strip() or "$0.00"
+                if source_kind == "workbook":
+                    notes = f"Active workbook: {source_label}"
+                else:
+                    notes = "Project standalone change order"
+
+                summaries.append(
+                    {
+                        "date": "",
+                        "description": (
+                            f"Change Order {change_order_number}: {description}"
+                            if description
+                            else f"Change Order {change_order_number}"
+                        ),
+                        "amount": amount_text,
+                        "approved_by": "",
+                        "notes": notes,
+                        "number": change_order_number,
+                        "source_kind": source_kind,
+                        "source_label": source_label,
+                    }
+                )
+        finally:
+            widget.deleteLater()
+
+        return summaries
+
+    def _load_legacy_project_change_order_rows(self, parent_path: Path) -> List[Dict[str, str]]:
+        log_path = self._ensure_project_change_order_log(parent_path)
+        headers, rows = self._read_csv_table(log_path)
+        if not headers:
+            headers = ["Date", "Description", "Amount", "Approved By", "Notes"]
+
+        column_map = {str(header or "").strip().lower(): idx for idx, header in enumerate(headers)}
+
+        def get_value(row: List[str], name: str) -> str:
+            idx = column_map.get(name.lower(), -1)
+            if idx < 0 or idx >= len(row):
+                return ""
+            return str(row[idx] or "")
+
+        legacy_rows: List[Dict[str, str]] = []
+        for row_index, row in enumerate(rows):
+            if not any(str(cell or "").strip() for cell in row):
+                continue
+            legacy_rows.append(
+                {
+                    "date": get_value(row, "Date"),
+                    "description": get_value(row, "Description"),
+                    "amount": get_value(row, "Amount"),
+                    "approved_by": get_value(row, "Approved By"),
+                    "notes": get_value(row, "Notes"),
+                    "number": "",
+                    "source_kind": "legacy",
+                    "source_label": "Legacy Log",
+                    "legacy_row_index": str(row_index),
+                }
+            )
+        return legacy_rows
+
+    def _populate_project_change_order_table(self, rows: List[Dict[str, str]]) -> None:
+        table = getattr(self, "_project_change_order_table", None)
+        if table is None:
+            return
+
+        headers = ["Date", "Description", "Amount", "Approved By", "Notes"]
+        table.blockSignals(True)
+        table.clearContents()
+        if table.columnCount() != len(headers):
+            table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setRowCount(len(rows))
+
+        for row_idx, row in enumerate(rows):
+            values = [
+                row.get("date", ""),
+                row.get("description", ""),
+                row.get("amount", ""),
+                row.get("approved_by", ""),
+                row.get("notes", ""),
+            ]
+            metadata = dict(row)
+            for col_idx, value in enumerate(values):
+                item = QTableWidgetItem(str(value or ""))
+                if col_idx == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, metadata)
+                table.setItem(row_idx, col_idx, item)
+
+        table.blockSignals(False)
+        if rows:
+            table.selectRow(0)
+
+    def _open_project_change_order_editor(self, change_order_number: Optional[str] = None) -> None:
+        parent_path = self._selected_parent_for_project_views()
+        if not parent_path:
+            QMessageBox.information(self, "Project Details", "Select a project first.")
+            return
+
+        co_markup_cfg = self._get_project_change_order_markup_config(parent_path)
+        co_markup_pct = float(co_markup_cfg["rate_pct"])
+        co_markup_verified = bool(co_markup_cfg["verified"])
+
+        active_workbook = self._get_active_workbook_path(parent_path)
+        if not active_workbook:
+            active_workbook = self._prompt_select_active_workbook(parent_path)
+        if not active_workbook:
+            return
+
+        schedule_headers, schedule_rows = self._read_csv_table(active_workbook / "Schedule.csv")
+        if not schedule_headers:
+            QMessageBox.information(self, "Project Details", "Schedule.csv was not found in the active workbook.")
+            return
+
+        storage_path = self._ensure_project_change_order_storage(parent_path)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Project Change Orders")
+        dlg.resize(1400, 860)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        info_label = QLabel(
+            f"Pricing source: {active_workbook.name}   |   CO Markup: {co_markup_pct:.3f}% ({'Verified' if co_markup_verified else 'Unverified'})   |   Save location: {storage_path.name}"
+        )
+        layout.addWidget(info_label)
+
+        change_orders_widget = ChangeOrdersWidget(
+            active_workbook,
+            (schedule_headers, schedule_rows),
+            parent=dlg,
+            change_callback=None,
+            storage_path=storage_path,
+            ohp_rate_override=(co_markup_pct / 100.0),
+        )
+        change_orders_widget.apply_theme(self.theme_colors)
+        layout.addWidget(change_orders_widget, 1)
+
+        if change_order_number:
+            all_numbers = (
+                set(change_orders_widget.alternates_openings_data.keys())
+                | set(change_orders_widget.alternates_costs_data.keys())
+                | set(change_orders_widget.alternates_subcontractor_data.keys())
+                | set(change_orders_widget.alternates_details_data.keys())
+            )
+            if change_order_number not in all_numbers:
+                change_orders_widget.alternates_openings_data[change_order_number] = []
+                change_orders_widget.alternates_costs_data[change_order_number] = []
+                change_orders_widget.alternates_subcontractor_data[change_order_number] = []
+                change_orders_widget.alternates_details_data[change_order_number] = {
+                    "description": "",
+                    "delivery_count": "0",
+                    "ot_hours": "0",
+                    "sub_ohp": "0",
+                    "include_parking": "1",
+                    "include_supervision": "1",
+                }
+                change_orders_widget.changes_made = True
+                change_orders_widget.update_alternates_list()
+
+            matches = change_orders_widget.alternates_list.findItems(change_order_number, Qt.MatchFlag.MatchExactly)
+            if matches:
+                change_orders_widget.alternates_list.setCurrentItem(matches[0])
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        save_button = QPushButton("Save")
+        save_button.setObjectName("primaryButton")
+        button_box.addButton(save_button, QDialogButtonBox.ButtonRole.AcceptRole)
+
+        def save_change_orders() -> None:
+            change_orders_widget.save_current_alternate_data()
+            change_orders_widget.changes_made = True
+            change_orders_widget.save_to_csv()
+            self._load_project_change_order_log()
+            QMessageBox.information(dlg, "Project Change Orders", "Project change orders saved.")
+
+        save_button.clicked.connect(save_change_orders)
+        button_box.rejected.connect(dlg.reject)
+        layout.addWidget(button_box)
+
+        dlg.exec()
+
+    def _open_selected_project_change_order(self) -> None:
+        table = getattr(self, "_project_change_order_table", None)
+        if table is None:
+            return
+
+        row = table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Project Details", "Select a change order first.")
+            return
+
+        item = table.item(row, 0)
+        metadata = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not isinstance(metadata, dict):
+            return
+
+        source_kind = str(metadata.get("source_kind", "") or "")
+        if source_kind == "project":
+            self._open_project_change_order_editor(str(metadata.get("number", "") or "").strip() or None)
+            return
+
+        if source_kind == "workbook":
+            parent_path = self._selected_parent_for_project_views()
+            if not parent_path:
+                return
+            active_workbook = self._get_active_workbook_path(parent_path)
+            if not active_workbook:
+                active_workbook = self._prompt_select_active_workbook(parent_path)
+            if active_workbook:
+                self.view_schedule(workbook_path=active_workbook)
+            return
+
+        QMessageBox.information(
+            self,
+            "Project Details",
+            "This is a legacy change order log row and cannot be opened in the standalone editor.",
+        )
+
     def _load_project_change_order_log(self) -> None:
         table = getattr(self, "_project_change_order_table", None)
         if table is None:
             return
 
+        self._refresh_project_change_order_markup_ui()
+
+        parent_path = self._selected_parent_for_project_views()
         log_path = self._resolve_project_change_order_log_path()
         self._project_change_order_path = log_path
-        table.blockSignals(True)
-        table.clearContents()
-        table.setRowCount(0)
 
-        if log_path is None or not log_path.exists():
-            table.blockSignals(False)
+        ohp_rate_override = None
+        if parent_path:
+            co_markup_cfg = self._get_project_change_order_markup_config(parent_path)
+            ohp_rate_override = float(co_markup_cfg["rate_pct"]) / 100.0
+
+        if not parent_path:
+            self._populate_project_change_order_table([])
             self._update_project_change_order_total_display()
             return
 
-        headers, rows = self._read_csv_table(log_path)
-        if not headers:
-            headers = ["Date", "Description", "Amount", "Approved By", "Notes"]
-        if table.columnCount() != len(headers):
-            table.setColumnCount(len(headers))
-        table.setHorizontalHeaderLabels(headers)
-        table.setRowCount(len(rows))
-        for r_idx, row in enumerate(rows):
-            for c_idx in range(len(headers)):
-                text = row[c_idx] if c_idx < len(row) else ""
-                table.setItem(r_idx, c_idx, QTableWidgetItem(str(text)))
-        table.blockSignals(False)
+        combined_rows: List[Dict[str, str]] = []
+        active_workbook = self._get_active_workbook_path(parent_path)
+        if active_workbook and active_workbook.exists():
+            combined_rows.extend(
+                self._load_change_order_summary_rows(
+                    active_workbook,
+                    active_workbook,
+                    "workbook",
+                    active_workbook.name,
+                    ohp_rate_override=ohp_rate_override,
+                )
+            )
+
+        project_storage = self._project_change_order_storage_path(parent_path)
+        if project_storage.exists() and project_storage.is_dir():
+            pricing_workbook = active_workbook if active_workbook and active_workbook.exists() else None
+            if pricing_workbook is not None:
+                combined_rows.extend(
+                    self._load_change_order_summary_rows(
+                        pricing_workbook,
+                        project_storage,
+                        "project",
+                        project_storage.name,
+                        ohp_rate_override=ohp_rate_override,
+                    )
+                )
+
+        combined_rows.extend(self._load_legacy_project_change_order_rows(parent_path))
+        self._populate_project_change_order_table(combined_rows)
         self._update_project_change_order_total_display()
 
     def _save_project_change_order_log(self) -> None:
-        table = getattr(self, "_project_change_order_table", None)
-        if table is None:
-            return
-
-        log_path = self._project_change_order_path
-        if log_path is None:
-            log_path = self._resolve_project_change_order_log_path()
-        if log_path is None:
-            QMessageBox.information(self, "Project Details", "Select a project first.")
-            return
-
-        headers: List[str] = []
-        for col_idx in range(table.columnCount()):
-            header_item = table.horizontalHeaderItem(col_idx)
-            headers.append(header_item.text() if header_item else "")
-
-        rows: List[List[str]] = []
-        for row_idx in range(table.rowCount()):
-            row: List[str] = []
-            row_has_value = False
-            for col_idx in range(table.columnCount()):
-                item = table.item(row_idx, col_idx)
-                text = item.text().strip() if item else ""
-                if text:
-                    row_has_value = True
-                row.append(text)
-            if row_has_value:
-                rows.append(row)
-
-        try:
-            with open(log_path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(rows)
-        except Exception as e:
-            QMessageBox.warning(self, "Project Details", f"Could not save {log_path.name}:\n{e}")
-            return
-
-        self._project_change_order_path = log_path
-        self._update_project_change_order_total_display()
-        QMessageBox.information(self, "Project Details", f"Saved {log_path.name}.")
+        self._load_project_change_order_log()
 
     def _add_project_change_order_row(self) -> None:
-        table = getattr(self, "_project_change_order_table", None)
-        if table is None:
+        parent_path = self._selected_parent_for_project_views()
+        if not parent_path:
+            QMessageBox.information(self, "Project Details", "Select a project first.")
             return
-        next_row = table.rowCount()
-        table.insertRow(next_row)
-        if table.columnCount() > 0 and table.item(next_row, 0) is None:
-            table.setItem(next_row, 0, QTableWidgetItem(datetime.now().strftime("%Y-%m-%d")))
-        table.setCurrentCell(next_row, 1 if table.columnCount() > 1 else 0)
+        storage_path = self._ensure_project_change_order_storage(parent_path)
+        self._open_project_change_order_editor(self._next_project_change_order_number(storage_path))
 
     def _delete_project_change_order_row(self) -> None:
         table = getattr(self, "_project_change_order_table", None)
@@ -8638,7 +9495,71 @@ class MainWindow(QMainWindow):
         if row < 0:
             QMessageBox.information(self, "Project Details", "Select a change order row to delete.")
             return
-        table.removeRow(row)
+
+        item = table.item(row, 0)
+        metadata = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not isinstance(metadata, dict):
+            return
+
+        source_kind = str(metadata.get("source_kind", "") or "")
+        parent_path = self._selected_parent_for_project_views()
+        if not parent_path:
+            return
+
+        if source_kind == "workbook":
+            QMessageBox.information(
+                self,
+                "Project Details",
+                "This change order belongs to the active workbook. Delete it from the workbook Change Orders tab.",
+            )
+            return
+
+        if source_kind == "legacy":
+            log_path = self._ensure_project_change_order_log(parent_path)
+            headers, rows = self._read_csv_table(log_path)
+            try:
+                legacy_index = int(str(metadata.get("legacy_row_index", "-1") or "-1"))
+            except Exception:
+                legacy_index = -1
+            if 0 <= legacy_index < len(rows):
+                del rows[legacy_index]
+                try:
+                    with open(log_path, "w", newline="", encoding="utf-8-sig") as f:
+                        writer = csv.writer(f)
+                        writer.writerow(headers or ["Date", "Description", "Amount", "Approved By", "Notes"])
+                        writer.writerows(rows)
+                except Exception as e:
+                    QMessageBox.warning(self, "Project Details", f"Could not update {log_path.name}:\n{e}")
+                    return
+            self._load_project_change_order_log()
+            return
+
+        if source_kind == "project":
+            storage_path = self._ensure_project_change_order_storage(parent_path)
+            change_order_number = str(metadata.get("number", "") or "").strip()
+            if not change_order_number:
+                return
+
+            for file_name in (
+                "Change_Orders.csv",
+                "Change_Orders_Costs.csv",
+                "Change_Orders_Subcontractor.csv",
+                "Change_Orders_Details.csv",
+            ):
+                file_path = storage_path / file_name
+                headers, rows = self._read_csv_table(file_path)
+                filtered_rows = [r for r in rows if not r or str(r[0] or "").strip() != change_order_number]
+                try:
+                    with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
+                        writer = csv.writer(f)
+                        if headers:
+                            writer.writerow(headers)
+                        writer.writerows(filtered_rows)
+                except Exception as e:
+                    QMessageBox.warning(self, "Project Details", f"Could not update {file_name}:\n{e}")
+                    return
+
+            self._load_project_change_order_log()
 
     def _calculate_project_change_order_total(self) -> float:
         """Calculate the sum of all Change Order amounts."""
@@ -8812,6 +9733,7 @@ class MainWindow(QMainWindow):
                 lbl.setText("These tabs are available when viewing Projects.")
             for key in ("financials", "purchase_orders", "work_orders"):
                 self._clear_project_view_table(key)
+            self._refresh_project_change_order_markup_ui()
             return
 
         parent_path = self._selected_parent_for_project_views()
@@ -8820,6 +9742,7 @@ class MainWindow(QMainWindow):
                 lbl.setText("Select a project to load this view.")
             for key in ("financials", "purchase_orders", "work_orders"):
                 self._clear_project_view_table(key)
+            self._refresh_project_change_order_markup_ui()
             return
 
         active_workbook = self._get_active_workbook_path(parent_path)
@@ -8828,6 +9751,7 @@ class MainWindow(QMainWindow):
                 lbl.setText("No active workbook is set. Choose one from the Main tab Workbooks section.")
             for key in ("financials", "purchase_orders", "work_orders"):
                 self._clear_project_view_table(key)
+            self._refresh_project_change_order_markup_ui()
             return
 
         active_name = active_workbook.name
@@ -8861,6 +9785,8 @@ class MainWindow(QMainWindow):
                 lbl.setText(f"Active workbook: {active_name}. Found {found}.")
             else:
                 lbl.setText(f"Active workbook: {active_name}. No matching file found ({', '.join(candidates)}).")
+
+        self._refresh_project_change_order_markup_ui()
 
         current_idx = self.project_details_views.currentIndex()
         if 0 <= current_idx < len(getattr(self, "_project_detail_tab_keys", [])):
@@ -10294,7 +11220,7 @@ class MainWindow(QMainWindow):
                     func(path)
                 except Exception:
                     # If still failing, try direct Windows attribute change
-                    if platform.system() == "Windows":
+                    if get_system() == "Windows":
                         try:
                             import subprocess
                             subprocess.run(['attrib', '-R', path], capture_output=True)
@@ -12207,6 +13133,8 @@ class MainWindow(QMainWindow):
             self._ensure_proposal_csv(active_path)
             self._ensure_proposal_json(active_path)
             self._ensure_allowances_csv(active_path)
+            if self._is_project_workbook(active_path):
+                self._ensure_change_orders_csvs(active_path)
 
         # Find all CSV files in the active workbook folder
         csv_files = []
@@ -12488,6 +13416,7 @@ class MainWindow(QMainWindow):
         admin_misc_headers = None
         total_bid_editor = None
         alternates_widget_ref = None
+        change_orders_widget_ref = None
         financials_kpi_labels = {}
         financials_kpi_values = {}
         financials_secondary_kpi_labels = {}
@@ -14646,8 +15575,38 @@ class MainWindow(QMainWindow):
                     tables_data.append((alternates_widget, csv_path, headers, None))
                 continue
 
-            # Skip Alternates_Details and Alternates_Costs (managed internally by AlternatesWidget)
-            if csv_path.stem.lower() in ("alternates_details", "alternates_costs", "alternates_subcontractor"):
+            if csv_path.stem.lower() == "change_orders":
+                if schedule_data and self._is_project_workbook(active_path):
+                    project_parent = self._project_parent_for_workbook(active_path)
+                    co_markup_rate_pct = self._default_change_order_markup_pct()
+                    if project_parent is not None:
+                        co_markup_cfg = self._get_project_change_order_markup_config(project_parent)
+                        co_markup_rate_pct = float(co_markup_cfg["rate_pct"])
+                    change_orders_widget = ChangeOrdersWidget(
+                        active_path,
+                        schedule_data,
+                        dlg,
+                        change_callback=mark_schedule_changed,
+                        ohp_rate_override=(co_markup_rate_pct / 100.0),
+                    )
+                    change_orders_widget_ref = change_orders_widget
+                    change_orders_widget.changes_made = False
+                    change_orders_widget.apply_theme(self.theme_colors)
+                    if financials_table is not None and financials_headers:
+                        change_orders_widget.set_financials_source(financials_table, financials_headers)
+
+                    tables_data.append((change_orders_widget, csv_path, headers, None))
+                continue
+
+            # Skip internal CSVs managed by the Alternates/Change Orders widgets.
+            if csv_path.stem.lower() in (
+                "alternates_details",
+                "alternates_costs",
+                "alternates_subcontractor",
+                "change_orders_details",
+                "change_orders_costs",
+                "change_orders_subcontractor",
+            ):
                 continue
 
             # Proposal tab as a styled layout (matches proposal sheet structure)
@@ -15965,6 +16924,8 @@ class MainWindow(QMainWindow):
                 tbl.setProperty("_updating_financials", False)
                 if alternates_widget_ref is not None:
                     alternates_widget_ref.set_financials_source(tbl, headers)
+                if change_orders_widget_ref is not None:
+                    change_orders_widget_ref.set_financials_source(tbl, headers)
                 def on_financials_item_changed(item, table=tbl, headers=headers):
                     if item is None:
                         return
@@ -16035,6 +16996,8 @@ class MainWindow(QMainWindow):
                     _apply_financials_card_styling(table, headers)
                     if alternates_widget_ref is not None and rate_col_idx is not None and item.column() == rate_col_idx:
                         alternates_widget_ref.refresh_financial_inputs()
+                    if change_orders_widget_ref is not None and rate_col_idx is not None and item.column() == rate_col_idx:
+                        change_orders_widget_ref.refresh_financial_inputs()
 
                 tbl.itemChanged.connect(on_financials_item_changed)
                 def _safe_trigger_financials_recalc(t=tbl, h=headers):
@@ -18597,6 +19560,11 @@ class MainWindow(QMainWindow):
             if isinstance(widget, HardwareGroupsWidget):
                 other_tables.append((widget, csv_path.stem))
                 continue
+
+            # Handle ChangeOrdersWidget specially before AlternatesWidget subclass checks.
+            if isinstance(widget, ChangeOrdersWidget):
+                other_tables.append((widget, "Change Orders"))
+                continue
             
             # Handle AlternatesWidget specially
             if isinstance(widget, AlternatesWidget):
@@ -18622,6 +19590,7 @@ class MainWindow(QMainWindow):
         financials_tab = take_other("financials")
         admin_misc_tab = take_other("admin_misc_cost")
         alternates_tab = take_other("alternates")
+        change_orders_tab = take_other("change orders")
 
         schedule_kpi_total_label = None
         schedule_kpi_visible_label = None
@@ -19259,7 +20228,7 @@ class MainWindow(QMainWindow):
                 # Check if we have an alternates widget
                 alternates_widget = None
                 for widget, csv_path, headers, quoted_col_idx in tables_data:
-                    if isinstance(widget, AlternatesWidget):
+                    if isinstance(widget, AlternatesWidget) and not isinstance(widget, ChangeOrdersWidget):
                         alternates_widget = widget
                         break
                 
@@ -19774,6 +20743,9 @@ class MainWindow(QMainWindow):
 
         if alternates_tab:
             tab_widget.addTab(alternates_tab[0], "Alternates")
+
+        if change_orders_tab:
+            tab_widget.addTab(change_orders_tab[0], "Change Orders")
 
         # Add any remaining tabs after the hardcoded ones
         for tbl, name in other_tables:
@@ -22012,6 +22984,514 @@ class MainWindow(QMainWindow):
         btn_use.clicked.connect(_use_cost)
         dlg.exec()
 
+    def open_quoted_lookup_from_home(self) -> None:
+        """Open a global quoted lookup dialog from Home with tab-specific filters."""
+        tc = self.theme_colors
+
+        tab_config = {
+            "wood_doors": {
+                "label": "Wood Doors",
+                "primary_col": "Door Type",
+                "csv_file": "Wood Doors.csv",
+                "fields": [
+                    ("Door Type", ["door type", "type"]),
+                    ("Active Width", ["active width"]),
+                    ("Inactive Width", ["inactive width"]),
+                    ("Height", ["height", "door height"]),
+                    ("Fire Rating", ["fire rating"]),
+                    ("Core", ["core"]),
+                    ("Veneer", ["veneer"]),
+                    ("Finish", ["finish"]),
+                    ("Mat'l", ["mat'l", "matl", "material"]),
+                    ("Thickness", ["thickness"]),
+                ],
+            },
+            "hollow_metal_doors": {
+                "label": "Hollow Metal Doors",
+                "primary_col": "Door Type",
+                "csv_file": "Hollow Metal Doors.csv",
+                "fields": [
+                    ("Door Type", ["door type", "type"]),
+                    ("Active Width", ["active width"]),
+                    ("Inactive Width", ["inactive width"]),
+                    ("Height", ["height", "door height"]),
+                    ("Fire Rating", ["fire rating"]),
+                    ("Core", ["core"]),
+                    ("Finish", ["finish"]),
+                    ("Mat'l", ["mat'l", "matl", "material"]),
+                    ("Gauge", ["gauge"]),
+                    ("Thickness", ["thickness"]),
+                ],
+            },
+            "aluminum_doors": {
+                "label": "Aluminum Doors",
+                "primary_col": "Door Type",
+                "csv_file": "Aluminum Doors.csv",
+                "fields": [
+                    ("Door Type", ["door type", "type"]),
+                    ("Active Width", ["active width"]),
+                    ("Inactive Width", ["inactive width"]),
+                    ("Height", ["height", "door height"]),
+                    ("Finish", ["finish"]),
+                    ("Glass", ["glass"]),
+                    ("Glass Thickness", ["glass thickness"]),
+                ],
+            },
+            "misc_doors": {
+                "label": "Misc. Doors",
+                "primary_col": "Door Type",
+                "csv_file": "Misc. Doors.csv",
+                "fields": [
+                    ("Door Type", ["door type", "type"]),
+                    ("Active Width", ["active width"]),
+                    ("Inactive Width", ["inactive width"]),
+                    ("Height", ["height", "door height"]),
+                    ("Fire Rating", ["fire rating"]),
+                    ("Core", ["core"]),
+                    ("Finish", ["finish"]),
+                ],
+            },
+            "hollow_metal_frames": {
+                "label": "Hollow Metal Frames",
+                "primary_col": "Frame Type",
+                "csv_file": "Hollow Metal Frames.csv",
+                "fields": [
+                    ("Frame Type", ["frame type", "type"]),
+                    ("Open Width", ["open width", "opening width"]),
+                    ("Open Height", ["open height", "opening height"]),
+                    ("Fire Rating", ["fire rating"]),
+                    ("Gauge", ["gauge"]),
+                    ("Face", ["face"]),
+                    ("Jamb Profile", ["jamb profile"]),
+                    ("Construction", ["construction"]),
+                    ("Return", ["return"]),
+                    ("Anchors", ["anchors"]),
+                    ("Sidelite", ["sidelite"]),
+                    ("Transom Width", ["transom width"]),
+                    ("Transom Height", ["transom height"]),
+                ],
+            },
+            "aluminum_frames": {
+                "label": "Aluminum Frames",
+                "primary_col": "Frame Type",
+                "csv_file": "Aluminum Frames.csv",
+                "fields": [
+                    ("Frame Type", ["frame type", "type"]),
+                    ("Open Width", ["open width", "opening width"]),
+                    ("Open Height", ["open height", "opening height"]),
+                    ("Finish", ["finish"]),
+                    ("2nd Finish", ["2nd finish", "second finish"]),
+                    ("Sidelite", ["sidelite"]),
+                    ("Glass Thickness", ["glass thickness"]),
+                    ("Wet Glaze", ["wet glaze"]),
+                    ("Applied Stops", ["applied stops"]),
+                ],
+            },
+            "misc_frames": {
+                "label": "Misc. Frames",
+                "primary_col": "Frame Type",
+                "csv_file": "Misc. Frames.csv",
+                "fields": [
+                    ("Frame Type", ["frame type", "type"]),
+                    ("Open Width", ["open width", "opening width"]),
+                    ("Open Height", ["open height", "opening height"]),
+                    ("Mat'l", ["mat'l", "matl", "material"]),
+                    ("Face", ["face"]),
+                    ("Profile", ["profile"]),
+                    ("Sidelite Or Transom", ["sidelite or transom", "sidelite/transom"]),
+                    ("Finish", ["finish"]),
+                ],
+            },
+            "hardware": {
+                "label": "Hardware",
+                "primary_col": "Hardware Part",
+                "csv_file": "Hardware.csv",
+                "fields": [
+                    ("MFR", ["mfr", "manufacturer"]),
+                    ("Hardware Part", ["hardware part", "part", "part name"]),
+                    ("FINISH", ["finish", "2nd finish", "second finish"]),
+                    ("Category", ["category"]),
+                ],
+            },
+        }
+
+        def _normalize_value(raw_value: str) -> str:
+            text = str(raw_value or "").strip().lower()
+            return re.sub(r"[^a-z0-9]+", "", text)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Quoted Pricing Lookup")
+        dlg.resize(1020, 700)
+        dlg.setStyleSheet(f"background-color:{tc['window_bg']}; color:{tc['text_primary']};")
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(8)
+
+        intro = QLabel(
+            "Select a table tab, enter one or more values to match, then search quoted rows across bids and projects."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color:{tc['text_muted']};")
+        layout.addWidget(intro)
+
+        type_row = QHBoxLayout()
+        type_row.addWidget(QLabel("Table:"))
+        type_combo = QComboBox()
+        for tab_key, cfg in tab_config.items():
+            type_combo.addItem(str(cfg["label"]), tab_key)
+        type_combo.setMinimumWidth(160)
+        type_row.addWidget(type_combo)
+        type_row.addStretch(1)
+        layout.addLayout(type_row)
+
+        form_stack = QStackedWidget()
+        field_inputs: Dict[str, Dict[str, QLineEdit]] = {}
+        for type_key, cfg in tab_config.items():
+            page = QWidget()
+            form = QFormLayout(page)
+            form.setContentsMargins(4, 4, 4, 4)
+            form.setHorizontalSpacing(12)
+            form.setVerticalSpacing(8)
+            inputs: Dict[str, QLineEdit] = {}
+            for field_name, _aliases in cfg["fields"]:
+                edit = QLineEdit()
+                edit.setPlaceholderText(field_name)
+                form.addRow(f"{field_name}:", edit)
+                inputs[field_name] = edit
+            field_inputs[type_key] = inputs
+            form_stack.addWidget(page)
+        layout.addWidget(form_stack)
+
+        search_row = QHBoxLayout()
+        btn_search = QPushButton("Search Quoted Matches")
+        btn_search.setStyleSheet(
+            f"background-color:{tc['button_bg']}; color:{tc['text_primary']}; padding:4px 12px;"
+        )
+        btn_clear = QPushButton("Clear Inputs")
+        btn_clear.setStyleSheet(
+            f"background-color:{tc['button_bg']}; color:{tc['text_primary']}; padding:4px 12px;"
+        )
+        status_label = QLabel("Enter match values, then click Search.")
+        status_label.setStyleSheet(f"color:{tc['text_muted']};")
+        search_row.addWidget(btn_search)
+        search_row.addWidget(btn_clear)
+        search_row.addSpacing(14)
+        search_row.addWidget(status_label)
+        search_row.addStretch(1)
+        layout.addLayout(search_row)
+
+        result_headers = ["Bid / Project", "Workbook", "Date", "Type", "Material Cost", "Vendor", "Match"]
+        results_tbl = QTableWidget(0, len(result_headers))
+        results_tbl.setHorizontalHeaderLabels(result_headers)
+        results_tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        results_tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        results_tbl.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        results_tbl.horizontalHeader().setStretchLastSection(True)
+        results_tbl.setStyleSheet(f"""
+            QTableWidget {{
+                background-color:{tc['input_bg']}; color:{tc['text_primary']};
+                gridline-color:{tc['gridline']};
+            }}
+            QTableWidget::item:selected {{
+                background-color:{tc['selection_bg']}; color:{tc['selection_text']};
+            }}
+        """)
+        layout.addWidget(results_tbl, 1)
+
+        details_label = QLabel("Selected Match Details:")
+        details_label.setStyleSheet(f"font-weight:600; color:{tc['text_primary']};")
+        layout.addWidget(details_label)
+
+        details_view = QTextEdit()
+        details_view.setReadOnly(True)
+        details_view.setMinimumHeight(150)
+        details_view.setStyleSheet(
+            f"background-color:{tc['input_bg']}; color:{tc['text_primary']}; border: 1px solid {tc['gridline']};"
+        )
+        details_view.setPlainText("Select a row to view all non-empty attributes.")
+        layout.addWidget(details_view)
+
+        btn_row = QHBoxLayout()
+        btn_copy_cost = QPushButton("Copy Material Cost")
+        btn_copy_cost.setEnabled(False)
+        btn_open_workbook = QPushButton("Open Workbook")
+        btn_open_workbook.setEnabled(False)
+        btn_open_quotes = QPushButton("Open Quotes Folder")
+        btn_open_quotes.setEnabled(False)
+        btn_close = QPushButton("Close")
+        btn_row.addWidget(btn_copy_cost)
+        btn_row.addWidget(btn_open_workbook)
+        btn_row.addWidget(btn_open_quotes)
+        btn_row.addStretch(1)
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+
+        results: List[Dict] = []
+
+        def _active_type_key() -> str:
+            return str(type_combo.currentData() or "wood_doors")
+
+        def _set_active_type_page() -> None:
+            form_stack.setCurrentIndex(max(0, type_combo.currentIndex()))
+
+        def _clear_results() -> None:
+            results.clear()
+            results_tbl.setRowCount(0)
+            details_view.setPlainText("Select a row to view all non-empty attributes.")
+            btn_copy_cost.setEnabled(False)
+            btn_open_workbook.setEnabled(False)
+            btn_open_quotes.setEnabled(False)
+
+        def _build_match_criteria(type_key: str) -> Dict[str, str]:
+            criteria: Dict[str, str] = {}
+            for field_name, _aliases in tab_config[type_key]["fields"]:
+                text = field_inputs[type_key][field_name].text().strip()
+                norm = _normalize_value(text)
+                if norm:
+                    criteria[field_name] = norm
+            return criteria
+
+        def _scan_base_rows_for_type(type_key: str) -> Tuple[List[Dict], int, int, bool]:
+            cfg = tab_config[type_key]
+            roots, roots_signature = self._quoted_search_roots_and_signature()
+            csv_name = str(cfg["csv_file"])
+            cache_key = (f"home_lookup:{type_key}:{csv_name.lower()}", roots_signature)
+            with self._quoted_search_cache_lock:
+                cache_entry = self._quoted_search_cache.get(cache_key)
+            if cache_entry:
+                cached_rows = cache_entry.get("rows", [])
+                scanned_files = int(cache_entry.get("scanned_files", 0))
+                processed_rows = int(cache_entry.get("processed_rows", 0))
+                return cached_rows if isinstance(cached_rows, list) else [], scanned_files, processed_rows, True
+
+            all_rows: List[Dict] = []
+            total_scanned_files = 0
+            total_processed_rows = 0
+            rows, scanned_files, processed_rows = self._scan_quoted_base_rows(
+                roots,
+                csv_name,
+                str(cfg["primary_col"]),
+            )
+            all_rows.extend(rows)
+            total_scanned_files += scanned_files
+            total_processed_rows += processed_rows
+
+            with self._quoted_search_cache_lock:
+                self._quoted_search_cache[cache_key] = {
+                    "rows": all_rows,
+                    "scanned_files": total_scanned_files,
+                    "processed_rows": total_processed_rows,
+                    "cached_at": time.time(),
+                }
+            return all_rows, total_scanned_files, total_processed_rows, False
+
+        def _filter_rows(type_key: str, base_rows: List[Dict], criteria: Dict[str, str]) -> List[Dict]:
+            alias_lookup: Dict[str, List[str]] = {}
+            for field_name, aliases in tab_config[type_key]["fields"]:
+                canonical = field_name
+                alias_lookup[canonical] = [a.strip().lower() for a in aliases if str(a).strip()]
+
+            filtered: List[Dict] = []
+            for record in base_rows:
+                norm_map = record.get("norm_map", {})
+                if not isinstance(norm_map, dict):
+                    norm_map = {}
+
+                matched = 0
+                for field_name, required_val in criteria.items():
+                    aliases = alias_lookup.get(field_name, [field_name.lower()])
+                    if any(str(norm_map.get(alias, "")) == required_val for alias in aliases):
+                        matched += 1
+
+                if criteria and matched == 0:
+                    continue
+
+                if criteria:
+                    match_str = f"{matched}/{len(criteria)}"
+                    match_sort = matched / len(criteria)
+                else:
+                    match_str = "all"
+                    match_sort = 1.0
+
+                filtered.append({
+                    "bid_name": record.get("bid_name", ""),
+                    "workbook": record.get("workbook", ""),
+                    "workbook_path": record.get("workbook_path", ""),
+                    "date": record.get("date", ""),
+                    "type_value": record.get("door_type", ""),
+                    "material_cost": record.get("material_cost", ""),
+                    "vendor": record.get("vendor", ""),
+                    "match_str": match_str,
+                    "match_sort": match_sort,
+                    "raw_map": record.get("raw_map", {}),
+                })
+
+            filtered.sort(key=lambda r: (-r.get("match_sort", 0), str(r.get("date", "")), str(r.get("bid_name", ""))))
+            return filtered
+
+        def _render_results(new_results: List[Dict]) -> None:
+            results_tbl.setRowCount(len(new_results))
+            for row_idx, rec in enumerate(new_results):
+                values = [
+                    str(rec.get("bid_name", "")),
+                    str(rec.get("workbook", "")),
+                    str(rec.get("date", "")),
+                    str(rec.get("type_value", "")),
+                    str(rec.get("material_cost", "")),
+                    str(rec.get("vendor", "")),
+                    str(rec.get("match_str", "")),
+                ]
+                for col_idx, val in enumerate(values):
+                    results_tbl.setItem(row_idx, col_idx, QTableWidgetItem(val))
+            results_tbl.resizeColumnsToContents()
+
+        def _show_selection_details(index: int) -> None:
+            if index < 0 or index >= len(results):
+                details_view.setPlainText("Select a row to view all non-empty attributes.")
+                btn_copy_cost.setEnabled(False)
+                btn_open_workbook.setEnabled(False)
+                btn_open_quotes.setEnabled(False)
+                return
+
+            rec = results[index]
+            lines = [
+                f"Bid / Project: {rec.get('bid_name', '')}",
+                f"Workbook: {rec.get('workbook', '')}",
+                f"Date: {rec.get('date', '')}",
+                f"Type: {rec.get('type_value', '')}",
+                f"Material Cost: {rec.get('material_cost', '')}",
+                f"Vendor: {rec.get('vendor', '')}",
+                f"Match: {rec.get('match_str', '')}",
+                "",
+                "All Attributes:",
+            ]
+            raw_map = rec.get("raw_map", {})
+            wrote = False
+            if isinstance(raw_map, dict):
+                for key, value in raw_map.items():
+                    text = str(value or "").strip()
+                    if not text:
+                        continue
+                    wrote = True
+                    lines.append(f"{key}: {text}")
+            if not wrote:
+                lines.append("(No non-empty attributes available)")
+            details_view.setPlainText("\n".join(lines))
+            btn_copy_cost.setEnabled(True)
+
+            workbook_path = Path(str(rec.get("workbook_path", "") or "").strip())
+            has_workbook = workbook_path.exists() and workbook_path.is_dir()
+            btn_open_workbook.setEnabled(has_workbook)
+
+            if has_workbook:
+                quotes_dir = workbook_path / "2.Quotes"
+                if not quotes_dir.exists() or not quotes_dir.is_dir():
+                    quotes_dir = workbook_path / "Quotes"
+                if not quotes_dir.exists() or not quotes_dir.is_dir():
+                    for child in workbook_path.iterdir():
+                        if child.is_dir() and "quote" in child.name.lower():
+                            quotes_dir = child
+                            break
+                btn_open_quotes.setEnabled(quotes_dir.exists() and quotes_dir.is_dir())
+            else:
+                btn_open_quotes.setEnabled(False)
+
+        def _run_search() -> None:
+            type_key = _active_type_key()
+            criteria = _build_match_criteria(type_key)
+            status_label.setText("Searching...")
+            QApplication.processEvents()
+
+            try:
+                base_rows, scanned_files, processed_rows, cached = _scan_base_rows_for_type(type_key)
+                filtered_rows = _filter_rows(type_key, base_rows, criteria)
+                results.clear()
+                results.extend(filtered_rows)
+                _render_results(filtered_rows)
+                _show_selection_details(-1)
+
+                cache_text = " [cached]" if cached else ""
+                if filtered_rows:
+                    status_label.setText(
+                        f"Found {len(filtered_rows)} match(es){cache_text} across {scanned_files} file(s) / {processed_rows} row(s)."
+                    )
+                else:
+                    status_label.setText(
+                        f"No matches found{cache_text} (searched {scanned_files} file(s) / {processed_rows} row(s))."
+                    )
+            except Exception as ex:
+                status_label.setText("Search failed.")
+                QtMessageBox.warning(dlg, "Quoted Lookup", f"Search failed:\n{ex}")
+
+        def _clear_inputs() -> None:
+            type_key = _active_type_key()
+            for edit in field_inputs[type_key].values():
+                edit.clear()
+            _clear_results()
+            status_label.setText("Inputs cleared.")
+
+        def _copy_material_cost() -> None:
+            row_idx = results_tbl.currentRow()
+            if row_idx < 0 or row_idx >= len(results):
+                return
+            cost_text = str(results[row_idx].get("material_cost", "")).strip()
+            if not cost_text:
+                QtMessageBox.information(dlg, "Quoted Lookup", "Selected match has no material cost value.")
+                return
+            QApplication.clipboard().setText(cost_text)  # type: ignore[union-attr]
+            status_label.setText("Material Cost copied to clipboard.")
+
+        def _open_workbook_folder() -> None:
+            row_idx = results_tbl.currentRow()
+            if row_idx < 0 or row_idx >= len(results):
+                return
+            workbook_path = Path(str(results[row_idx].get("workbook_path", "") or "").strip())
+            if not workbook_path.exists() or not workbook_path.is_dir():
+                QtMessageBox.information(dlg, "Quoted Lookup", "Workbook folder was not found for this match.")
+                return
+            self.view_schedule(workbook_path=workbook_path)
+
+        def _open_quotes_folder() -> None:
+            row_idx = results_tbl.currentRow()
+            if row_idx < 0 or row_idx >= len(results):
+                return
+            workbook_path = Path(str(results[row_idx].get("workbook_path", "") or "").strip())
+            if not workbook_path.exists() or not workbook_path.is_dir():
+                QtMessageBox.information(dlg, "Quoted Lookup", "Workbook folder was not found for this match.")
+                return
+
+            quotes_dir = workbook_path / "2.Quotes"
+            if not quotes_dir.exists() or not quotes_dir.is_dir():
+                quotes_dir = workbook_path / "Quotes"
+            if not quotes_dir.exists() or not quotes_dir.is_dir():
+                for child in workbook_path.iterdir():
+                    if child.is_dir() and "quote" in child.name.lower():
+                        quotes_dir = child
+                        break
+
+            if not quotes_dir.exists() or not quotes_dir.is_dir():
+                QtMessageBox.information(dlg, "Quoted Lookup", "No quotes folder was found in the selected workbook.")
+                return
+
+            open_in_file_manager(quotes_dir)
+
+        def _on_type_changed() -> None:
+            _set_active_type_page()
+            _clear_results()
+            status_label.setText("Table changed. Enter values and search.")
+
+        type_combo.currentIndexChanged.connect(_on_type_changed)
+        results_tbl.itemSelectionChanged.connect(lambda: _show_selection_details(results_tbl.currentRow()))
+        btn_search.clicked.connect(_run_search)
+        btn_clear.clicked.connect(_clear_inputs)
+        btn_copy_cost.clicked.connect(_copy_material_cost)
+        btn_open_workbook.clicked.connect(_open_workbook_folder)
+        btn_open_quotes.clicked.connect(_open_quotes_folder)
+        btn_close.clicked.connect(dlg.accept)
+
+        _set_active_type_page()
+        dlg.exec()
+
     def _quoted_search_roots_and_signature(self) -> Tuple[List[Path], Tuple[str, ...]]:
         roots: List[Path] = []
         for attr in ("bids", "submitted", "awarded", "projects"):
@@ -22101,10 +23581,13 @@ class MainWindow(QMainWindow):
                                 base_rows.append({
                                     "bid_name": bid_name,
                                     "workbook": wb_dir.name,
+                                    "workbook_path": str(wb_dir),
+                                    "csv_path": str(found_csv),
                                     "date": created_at,
                                     "door_type": _cell(dtype_idx),
                                     "material_cost": mat_cost_val,
                                     "vendor": _cell(vendor_idx),
+                                    "raw_map": {str(h): _cell(i) for i, h in enumerate(csv_hdrs)},
                                     "norm_map": norm_map,
                                 })
                     except Exception:
@@ -28646,7 +30129,7 @@ class MainWindow(QMainWindow):
             file_name = clean_name + "_Export.txt"
             
             # Determine Desktop path
-            if platform.system() == "Darwin":  # macOS
+            if get_system() == "Darwin":  # macOS
                 desktop_path = Path.home() / "Desktop"
             else:  # Windows and others
                 try:

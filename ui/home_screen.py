@@ -33,6 +33,7 @@ class HomeScreen(QWidget):
     navigate_to_customers = pyqtSignal()
     navigate_to_my_company = pyqtSignal()
     navigate_to_preferences = pyqtSignal()
+    navigate_to_quoted_lookup = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -414,6 +415,9 @@ class HomeScreen(QWidget):
         self.btn_preferences = self._create_action_card(
             "Preferences", "Adjust themes, defaults, and behavior.", self.navigate_to_preferences.emit, False
         )
+        self.btn_quoted_lookup = self._create_action_card(
+            "Quoted Lookup", "Find quoted door, frame, and hardware pricing matches.", self.navigate_to_quoted_lookup.emit, False
+        )
 
         self._action_cards = [
             self.btn_bids,
@@ -423,6 +427,7 @@ class HomeScreen(QWidget):
             self.btn_customers,
             self.btn_my_company,
             self.btn_preferences,
+            self.btn_quoted_lookup,
         ]
 
         self._menu_buttons = [
@@ -433,6 +438,7 @@ class HomeScreen(QWidget):
             self.btn_customers,
             self.btn_my_company,
             self.btn_preferences,
+            self.btn_quoted_lookup,
         ]
 
         self._update_home_mode_buttons()
@@ -494,6 +500,7 @@ class HomeScreen(QWidget):
             self.btn_customers.setText("Customers\nReview customer records and communication history.")
             self.btn_my_company.setText("My Company\nManage internal contacts, PM roster, and defaults.")
             self.btn_preferences.setText("Preferences\nAdjust themes, defaults, and behavior.")
+            self.btn_quoted_lookup.setText("Quoted Lookup\nFind quoted door, frame, and hardware pricing matches.")
         else:
             self.hero_title.setText("Home")
             self.hero_subtitle.setText("Your bids, tasks, and deadlines in one place")
@@ -508,6 +515,7 @@ class HomeScreen(QWidget):
             self.btn_customers.setText("Customers\nAccess customer records and communication.")
             self.btn_my_company.setText("My Company\nOpen company settings and account details.")
             self.btn_preferences.setText("Preferences\nAdjust themes, defaults, and behavior.")
+            self.btn_quoted_lookup.setText("Quoted Lookup\nFind quoted door, frame, and hardware pricing matches.")
 
         for widget in (
             self.btn_scope_me,
@@ -610,7 +618,9 @@ class HomeScreen(QWidget):
             (self.btn_vendors, self.btn_customers),
             (self.btn_customers, self.btn_my_company),
             (self.btn_my_company, self.btn_preferences),
+            (self.btn_preferences, self.btn_quoted_lookup),
             (self.btn_top_period_all, self.btn_bids),
+            (self.btn_quoted_lookup, self.hero_open_bids),
         ]
         for first, second in pairs:
             if first.window() is second.window():
@@ -712,6 +722,9 @@ class HomeScreen(QWidget):
                 return {}
             payload = json.loads(raw.decode("utf-8", errors="ignore"))
             return payload if isinstance(payload, dict) else {}
+        except KeyboardInterrupt:
+            # If a terminal interrupt occurs mid-refresh, treat this record as unread.
+            return {}
         except Exception:
             return {}
 
@@ -725,7 +738,11 @@ class HomeScreen(QWidget):
                 timed_out = True
                 break
 
-            info = self._safe_read_bid_info(project_path)
+            try:
+                info = self._safe_read_bid_info(project_path)
+            except KeyboardInterrupt:
+                timed_out = True
+                break
             due_dt = parse_due_date(str(info.get("due_date", "")).strip())
             created_dt = self._parse_iso_date(str(info.get("created_at", "")).strip())
             try:
@@ -823,7 +840,11 @@ class HomeScreen(QWidget):
                 if not bid_path.is_dir():
                     continue
 
-                info = self._safe_read_bid_info(bid_path)
+                try:
+                    info = self._safe_read_bid_info(bid_path)
+                except KeyboardInterrupt:
+                    timed_out = True
+                    break
                 if not scope_all:
                     estimator = str(info.get("estimator", "")).strip().lower()
                     if username:
@@ -863,6 +884,62 @@ class HomeScreen(QWidget):
 
             if timed_out:
                 break
+
+        # Projects promoted from awarded bids count toward bid KPIs (YTD Awarded, Win Rate, etc.)
+        if not timed_out and self.paths.projects.exists():
+            for project_path in sorted(self.paths.projects.iterdir()):
+                if time_budget_seconds is not None and (time.monotonic() - started > time_budget_seconds):
+                    timed_out = True
+                    break
+
+                if not project_path.is_dir():
+                    continue
+
+                try:
+                    info = self._safe_read_bid_info(project_path)
+                except KeyboardInterrupt:
+                    timed_out = True
+                    break
+                promoted_at_raw = str(info.get("promoted_at", "")).strip()
+                if not promoted_at_raw:
+                    continue
+
+                if not scope_all:
+                    estimator = str(info.get("estimator", "")).strip().lower()
+                    if username:
+                        if not estimator or estimator != username:
+                            continue
+
+                award_dt = self._parse_iso_date(promoted_at_raw)
+                try:
+                    modified_dt = award_dt or date.fromtimestamp(project_path.stat().st_mtime)
+                except Exception:
+                    modified_dt = date.today()
+
+                due_dt = parse_due_date(str(info.get("due_date", "")).strip())
+                created_dt = self._parse_iso_date(str(info.get("created_at", "")).strip())
+                if created_dt is None:
+                    created_dt = modified_dt
+
+                # Use contract_amount locked in at promotion; fall back to workbook/manual totals
+                value = self._parse_money(info.get("contract_amount", None))
+                if value <= 0.0:
+                    value = self._parse_money(info.get("manual_bid_total", None))
+                if value <= 0.0:
+                    value = self._parse_money(info.get("bid_total", None))
+
+                customer_name = self._extract_customer_name(info)
+                proposal_type = str(info.get("proposal_type", "")).strip().lower()
+
+                records.append({
+                    "status": "awarded",
+                    "due_date": due_dt,
+                    "created_date": created_dt,
+                    "modified_date": modified_dt,
+                    "value": value,
+                    "customer": customer_name,
+                    "proposal_type": proposal_type,
+                })
 
         self._kpi_scan_truncated = timed_out
 

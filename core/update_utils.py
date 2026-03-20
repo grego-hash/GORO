@@ -24,6 +24,7 @@ from core.constants import (
     UPDATE_CHECK_INTERVAL_HOURS,
     UPDATE_REQUEST_TIMEOUT_SECONDS,
 )
+from core.models import resolve_data_root
 
 
 @dataclass(frozen=True)
@@ -164,11 +165,7 @@ def _resolve_local_manifest_path(settings: QSettings) -> Path | None:
         if candidate.exists() and candidate.is_file():
             return candidate
 
-    root_dir = str(settings.value("root_dir", "")).strip()
-    if root_dir:
-        root = Path(root_dir)
-    else:
-        root = Path(__file__).resolve().parent.parent / "data"
+    root = resolve_data_root(settings)
 
     candidate = root / "updates.json"  # inside selected data folder
     if candidate.exists() and candidate.is_file():

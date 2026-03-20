@@ -1,11 +1,12 @@
 ﻿"""Optional runtime services and dependency bootstrap for GORO."""
 
 import os
-import platform
 import shutil
 import sys
 from pathlib import Path
 from typing import List, Optional
+
+from core.utils import get_system
 
 
 # Windows recycle bin function using native API (avoids WMI issues)
@@ -175,7 +176,7 @@ def resolve_tesseract_path(settings=None) -> Optional[str]:
     if path_tesseract:
         candidates.append(path_tesseract)
 
-    if platform.system() == "Windows":
+    if get_system() == "Windows":
         candidates.extend(
             [
                 r"C:\Program Files\Tesseract-OCR\tesseract.exe",

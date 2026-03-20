@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.constants import APP_NAME, ORG_NAME
+from core.models import resolve_data_root
 from .main_window_hw_groups import write_hardware_groups_pdf
 from .main_window_hardware_groups_widget import (
     _trim_trailing_blank_rows,
@@ -884,8 +885,7 @@ class CombinedHardwareWidget(QWidget):
         import csv
         
         settings = QSettings(ORG_NAME, APP_NAME)
-        root_dir = str(settings.value("root_dir", "", type=str)).strip()
-        data_dir = Path(root_dir) if root_dir else (Path(__file__).resolve().parent.parent / "data")
+        data_dir = resolve_data_root(settings)
         vendors_info_path = data_dir / "vendors_info.csv"
         
         vendors_data = {}
@@ -2693,9 +2693,17 @@ class CombinedHardwareWidget(QWidget):
 class AlternatesSelectionWidget(QWidget):
     """Widget for selecting alternates in the proposal with checkboxes."""
     
-    def __init__(self, alternates_widget, parent=None):
+    def __init__(
+        self,
+        alternates_widget,
+        parent=None,
+        item_label_singular: str = "Alternate",
+        item_label_plural: str = "Alternates",
+    ):
         super().__init__(parent)
         self.alternates_widget = alternates_widget
+        self.item_label_singular = item_label_singular
+        self.item_label_plural = item_label_plural
         self.alt_checkboxes = {}  # {alt_num: QCheckBox}
         self.alt_labels = {}      # {alt_num: QLabel (description + total)}
         self.alt_openings_checkboxes = {}  # {alt_num: QCheckBox for opening numbers}
@@ -2766,7 +2774,7 @@ class AlternatesSelectionWidget(QWidget):
             # Get description and total sell
             details = self.alternates_widget.alternates_details_data.get(alt_num, {})
             description = details.get('description', '')
-            label_text = f"Alternate {alt_num}"
+            label_text = f"{self.item_label_singular} {alt_num}"
             if description:
                 label_text += f": {description}"
             
@@ -2791,7 +2799,7 @@ class AlternatesSelectionWidget(QWidget):
         for alt_num, label in self.alt_labels.items():
             details = self.alternates_widget.alternates_details_data.get(alt_num, {})
             description = details.get('description', '')
-            label_text = f"Alternate {alt_num}"
+            label_text = f"{self.item_label_singular} {alt_num}"
             if description:
                 label_text += f": {description}"
             label.setText(label_text)
@@ -2845,7 +2853,7 @@ class AlternatesSelectionWidget(QWidget):
                 total_value = 0.0
             
             # Build line
-            line = f"Alternate {alt_num}"
+            line = f"{self.item_label_singular} {alt_num}"
             if description:
                 line += f": {description}"
             line += f" - {total_sell_text}"
@@ -2862,9 +2870,21 @@ class AlternatesSelectionWidget(QWidget):
         # Add total if there are selected alternates
         if lines:
             lines.append("")
-            lines.append(f"Total Alternates: ${total_selected:,.2f}")
+            lines.append(f"Total {self.item_label_plural}: ${total_selected:,.2f}")
         
         return "\n".join(lines) if lines else ""
+
+
+class ChangeOrdersSelectionWidget(AlternatesSelectionWidget):
+    """Proposal selection widget for change orders."""
+
+    def __init__(self, change_orders_widget, parent=None):
+        super().__init__(
+            change_orders_widget,
+            parent=parent,
+            item_label_singular="Change Order",
+            item_label_plural="Change Orders",
+        )
 
 
 class AdminMiscSelectionWidget(QWidget):
@@ -3074,10 +3094,27 @@ class AdminMiscSelectionWidget(QWidget):
 class AlternatesWidget(QWidget):
     """Custom widget for managing alternates with openings and costs."""
     
-    def __init__(self, workbook_path, schedule_data, parent=None, change_callback=None):
+    def __init__(
+        self,
+        workbook_path,
+        schedule_data,
+        parent=None,
+        change_callback=None,
+        storage_path=None,
+        item_label_singular: str = "Alternate",
+        item_label_plural: str = "Alternates",
+        data_file_prefix: str = "Alternates",
+        record_number_header: str = "Alternate Number",
+        ohp_rate_override: Optional[float] = None,
+    ):
         super().__init__(parent)
         self.workbook_path = workbook_path
+        self.storage_path = storage_path if storage_path is not None else workbook_path
         self.schedule_headers, self.schedule_rows = schedule_data
+        self.item_label_singular = item_label_singular
+        self.item_label_plural = item_label_plural
+        self.data_file_prefix = data_file_prefix
+        self.record_number_header = record_number_header
         self.current_alternate = None
         self.changes_made = False
         self.change_callback = change_callback
@@ -3088,6 +3125,7 @@ class AlternatesWidget(QWidget):
         self.financials_table: QTableWidget | None = None
         self.financials_headers: list[str] = []
         self.financials_rate_col_idx: int | None = None
+        self.ohp_rate_override: Optional[float] = ohp_rate_override
         self._updating_alternate_details = False
         self.description_edit: QLineEdit
         self.delivery_count_edit: QLineEdit
@@ -3095,6 +3133,8 @@ class AlternatesWidget(QWidget):
         self.sub_ohp_edit: QLineEdit
         self.total_sell_value_label: QLabel
         self.sell_summary_labels: dict[str, QLabel] = {}
+        self.include_parking_checkbox: QCheckBox
+        self.include_supervision_checkbox: QCheckBox
         self.subcontractor_table: NoRowHeaderTable
         
         self.setup_ui()
@@ -3109,7 +3149,7 @@ class AlternatesWidget(QWidget):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         
-        alt_label = QLabel("Alternates")
+        alt_label = QLabel(self.item_label_plural)
         alt_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         
         # Button layout for alternates
@@ -3205,7 +3245,7 @@ class AlternatesWidget(QWidget):
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
 
-        details_group = QGroupBox("Alternate Details & Sell")
+        details_group = QGroupBox(f"{self.item_label_singular} Details & Sell")
         details_layout = QGridLayout(details_group)
         details_layout.setContentsMargins(8, 8, 8, 8)
         details_layout.setHorizontalSpacing(8)
@@ -3231,6 +3271,16 @@ class AlternatesWidget(QWidget):
         details_layout.addWidget(QLabel("Sub OH & P (%)"), 1, 2)
         details_layout.addWidget(self.sub_ohp_edit, 1, 3)
 
+        self.include_parking_checkbox = QCheckBox("Include Parking")
+        self.include_parking_checkbox.setChecked(True)
+        self.include_parking_checkbox.toggled.connect(self.on_alternate_detail_changed)
+        details_layout.addWidget(self.include_parking_checkbox, 2, 2)
+
+        self.include_supervision_checkbox = QCheckBox("Include Supervision")
+        self.include_supervision_checkbox.setChecked(True)
+        self.include_supervision_checkbox.toggled.connect(self.on_alternate_detail_changed)
+        details_layout.addWidget(self.include_supervision_checkbox, 2, 3)
+
         def add_summary_row(row_idx, label_text, key):
             label = QLabel(label_text)
             value_label = QLabel("$0.00")
@@ -3241,17 +3291,19 @@ class AlternatesWidget(QWidget):
 
         add_summary_row(3, "Material Total", "material_total")
         add_summary_row(4, "Labor Total", "labor_total")
-        add_summary_row(5, "Hard Cost Total", "hard_cost_total")
-        add_summary_row(6, "OH & P", "ohp")
-        add_summary_row(7, "Sub OH & P", "sub_ohp")
+        add_summary_row(5, "Parking", "parking")
+        add_summary_row(6, "Supervision", "supervision")
+        add_summary_row(7, "Hard Cost Total", "hard_cost_total")
+        add_summary_row(8, "OH & P", "ohp")
+        add_summary_row(9, "Sub OH & P", "sub_ohp")
 
         total_sell_label = QLabel("Total Sell")
         total_sell_label.setStyleSheet("font-weight: bold;")
         self.total_sell_value_label = QLabel("$0.00")
         self.total_sell_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.total_sell_value_label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        details_layout.addWidget(total_sell_label, 8, 0, 1, 3)
-        details_layout.addWidget(self.total_sell_value_label, 8, 3)
+        details_layout.addWidget(total_sell_label, 10, 0, 1, 3)
+        details_layout.addWidget(self.total_sell_value_label, 10, 3)
 
         right_layout.addWidget(details_group)
         
@@ -3425,11 +3477,10 @@ class AlternatesWidget(QWidget):
     
     def load_alternates_data(self):
         """Load alternates data from CSV files."""
-        # Look for Alternates.csv in workbook path
-        alternates_openings_path = self.workbook_path / "Alternates.csv"
-        alternates_costs_path = self.workbook_path / "Alternates_Costs.csv"
-        alternates_subcontractor_path = self.workbook_path / "Alternates_Subcontractor.csv"
-        alternates_details_path = self.workbook_path / "Alternates_Details.csv"
+        alternates_openings_path = self._managed_csv_path()
+        alternates_costs_path = self._managed_csv_path("_Costs")
+        alternates_subcontractor_path = self._managed_csv_path("_Subcontractor")
+        alternates_details_path = self._managed_csv_path("_Details")
         
         # Load openings data
         if alternates_openings_path.exists():
@@ -3505,7 +3556,7 @@ class AlternatesWidget(QWidget):
                 with open(alternates_details_path, 'r', newline='', encoding='utf-8-sig') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
-                        alt_num = (row.get('Alternate Number') or '').strip()
+                        alt_num = (row.get(self.record_number_header) or row.get('Alternate Number') or '').strip()
                         if not alt_num:
                             continue
                         self.alternates_details_data[alt_num] = {
@@ -3513,6 +3564,8 @@ class AlternatesWidget(QWidget):
                             'delivery_count': ((row.get('Delivery Hours') or row.get('Delivery Count')) or '').strip(),
                             'ot_hours': (row.get('OT Hours') or '').strip(),
                             'sub_ohp': (row.get('Sub OH & P') or '').strip(),
+                            'include_parking': (row.get('Include Parking') or '1').strip(),
+                            'include_supervision': (row.get('Include Supervision') or '1').strip(),
                         }
             except Exception:
                 pass
@@ -3522,7 +3575,17 @@ class AlternatesWidget(QWidget):
             self.alternates_openings_data.setdefault(alt_num, [])
             self.alternates_costs_data.setdefault(alt_num, [])
             self.alternates_subcontractor_data.setdefault(alt_num, [])
-            self.alternates_details_data.setdefault(alt_num, {'description': '', 'delivery_count': '0', 'ot_hours': '0', 'sub_ohp': '0'})
+            self.alternates_details_data.setdefault(
+                alt_num,
+                {
+                    'description': '',
+                    'delivery_count': '0',
+                    'ot_hours': '0',
+                    'sub_ohp': '0',
+                    'include_parking': '1',
+                    'include_supervision': '1',
+                },
+            )
         
         # Populate alternates list
         self.update_alternates_list()
@@ -3693,7 +3756,9 @@ class AlternatesWidget(QWidget):
     def add_new_alternate(self):
         """Add a new alternate."""
         text, ok = QInputDialog.getText(
-            self, "Add Alternate", "Enter alternate number:"
+            self,
+            f"Add {self.item_label_singular}",
+            f"Enter {self.item_label_singular.lower()} number:",
         )
         if ok and text.strip():
             alt_num = text.strip()
@@ -3704,7 +3769,14 @@ class AlternatesWidget(QWidget):
             if alt_num not in self.alternates_subcontractor_data:
                 self.alternates_subcontractor_data[alt_num] = []
             if alt_num not in self.alternates_details_data:
-                self.alternates_details_data[alt_num] = {'description': '', 'delivery_count': '0', 'ot_hours': '0', 'sub_ohp': '0'}
+                self.alternates_details_data[alt_num] = {
+                    'description': '',
+                    'delivery_count': '0',
+                    'ot_hours': '0',
+                    'sub_ohp': '0',
+                    'include_parking': '1',
+                    'include_supervision': '1',
+                }
             
             self.update_alternates_list()
             self.changes_made = True
@@ -3724,8 +3796,9 @@ class AlternatesWidget(QWidget):
             return
         
         reply = QMessageBox.question(
-            self, "Delete Alternate",
-            f"Delete alternate {self.current_alternate}?",
+            self,
+            f"Delete {self.item_label_singular}",
+            f"Delete {self.item_label_singular.lower()} {self.current_alternate}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
@@ -3746,7 +3819,11 @@ class AlternatesWidget(QWidget):
     def add_new_opening(self):
         """Add a new opening row."""
         if not self.current_alternate:
-            QMessageBox.warning(self, "No Alternate", "Please select or create an alternate first.")
+            QMessageBox.warning(
+                self,
+                f"No {self.item_label_singular}",
+                f"Please select or create a {self.item_label_singular.lower()} first.",
+            )
             return
         
         row_idx = self.openings_table.rowCount()
@@ -3771,7 +3848,11 @@ class AlternatesWidget(QWidget):
     def add_new_cost(self):
         """Add a new cost row."""
         if not self.current_alternate:
-            QMessageBox.warning(self, "No Alternate", "Please select or create an alternate first.")
+            QMessageBox.warning(
+                self,
+                f"No {self.item_label_singular}",
+                f"Please select or create a {self.item_label_singular.lower()} first.",
+            )
             return
         
         row_idx = self.costs_table.rowCount()
@@ -3796,7 +3877,11 @@ class AlternatesWidget(QWidget):
     def add_new_subcontractor(self):
         """Add a new subcontractor row."""
         if not self.current_alternate:
-            QMessageBox.warning(self, "No Alternate", "Please select or create an alternate first.")
+            QMessageBox.warning(
+                self,
+                f"No {self.item_label_singular}",
+                f"Please select or create a {self.item_label_singular.lower()} first.",
+            )
             return
         
         row_idx = self.subcontractor_table.rowCount()
@@ -3855,6 +3940,8 @@ class AlternatesWidget(QWidget):
             self.delivery_count_edit.setEnabled(enabled)
             self.ot_hours_edit.setEnabled(enabled)
             self.sub_ohp_edit.setEnabled(enabled)
+            self.include_parking_checkbox.setEnabled(enabled)
+            self.include_supervision_checkbox.setEnabled(enabled)
         if not enabled:
             if self.description_edit is not None:
                 self._updating_alternate_details = True
@@ -3862,15 +3949,31 @@ class AlternatesWidget(QWidget):
                 self.delivery_count_edit.setText("")
                 self.ot_hours_edit.setText("")
                 self.sub_ohp_edit.setText("")
+                self.include_parking_checkbox.setChecked(True)
+                self.include_supervision_checkbox.setChecked(True)
                 self._updating_alternate_details = False
             self._set_sell_summary_values({
                 'material_total': 0.0,
                 'labor_total': 0.0,
+                'parking': 0.0,
+                'supervision': 0.0,
                 'hard_cost_total': 0.0,
                 'ohp': 0.0,
                 'sub_ohp': 0.0,
                 'total_sell': 0.0,
             })
+
+    def _parse_boolish(self, value: object, default: bool = True) -> bool:
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if not text:
+            return default
+        if text in ("1", "true", "yes", "y", "on", "checked"):
+            return True
+        if text in ("0", "false", "no", "n", "off", "unchecked"):
+            return False
+        return default
 
     def _set_sell_summary_values(self, values: Dict[str, float]):
         for key, label in self.sell_summary_labels.items():
@@ -4323,6 +4426,9 @@ class AlternatesWidget(QWidget):
             subcontractor_total += cost * sign
         return subcontractor_total
 
+    def _managed_csv_path(self, suffix: str = "") -> Path:
+        return self.storage_path / f"{self.data_file_prefix}{suffix}.csv"
+
     def _recalculate_current_alternate_sell(self):
         if not self.current_alternate:
             return
@@ -4340,11 +4446,13 @@ class AlternatesWidget(QWidget):
         ot_rate = self._get_financials_rate("ot rate")
         parking_rate = self._get_financials_rate("parking")
         supervision_rate = self._get_financials_rate("supervision")
-        ohp_rate = self._get_financials_rate("oh & p")
+        ohp_rate = self.ohp_rate_override if self.ohp_rate_override is not None else self._get_financials_rate("oh & p")
 
         delivery_hours = self._parse_number(self.delivery_count_edit.text() if self.delivery_count_edit else "")
         ot_hours = self._parse_number(self.ot_hours_edit.text() if self.ot_hours_edit else "")
         sub_ohp_percentage = self._parse_number(self.sub_ohp_edit.text() if self.sub_ohp_edit else "")
+        include_parking = self.include_parking_checkbox.isChecked() if self.include_parking_checkbox else True
+        include_supervision = self.include_supervision_checkbox.isChecked() if self.include_supervision_checkbox else True
 
         misc_material = material_sub_total * misc_material_rate
         tax = (material_sub_total + misc_material) * tax_rate
@@ -4358,9 +4466,9 @@ class AlternatesWidget(QWidget):
         labor_total = labor + misc_labor
 
         parking = 0.0
-        if labor_rate > 0:
+        if include_parking and labor_rate > 0:
             parking = (labor_total / labor_rate / 8.0) * parking_rate
-        supervision = labor_total * supervision_rate
+        supervision = labor_total * supervision_rate if include_supervision else 0.0
 
         hard_cost_total = material_total + labor_total + parking + supervision
         ohp = 0.0
@@ -4376,6 +4484,8 @@ class AlternatesWidget(QWidget):
         self._set_sell_summary_values({
             'material_total': material_total,
             'labor_total': labor_total,
+            'parking': parking,
+            'supervision': supervision,
             'hard_cost_total': hard_cost_total,
             'ohp': ohp,
             'sub_ohp': sub_ohp_markup,
@@ -4387,12 +4497,24 @@ class AlternatesWidget(QWidget):
         if not self.current_alternate or self.description_edit is None:
             return
 
-        details = self.alternates_details_data.get(self.current_alternate, {'description': '', 'delivery_count': '0', 'ot_hours': '0', 'sub_ohp': '0'})
+        details = self.alternates_details_data.get(
+            self.current_alternate,
+            {
+                'description': '',
+                'delivery_count': '0',
+                'ot_hours': '0',
+                'sub_ohp': '0',
+                'include_parking': '1',
+                'include_supervision': '1',
+            },
+        )
         self._updating_alternate_details = True
         self.description_edit.setText(details.get('description', ''))
         self.delivery_count_edit.setText(details.get('delivery_count', '0'))
         self.ot_hours_edit.setText(details.get('ot_hours', '0'))
         self.sub_ohp_edit.setText(details.get('sub_ohp', '0'))
+        self.include_parking_checkbox.setChecked(self._parse_boolish(details.get('include_parking', '1'), default=True))
+        self.include_supervision_checkbox.setChecked(self._parse_boolish(details.get('include_supervision', '1'), default=True))
         self._updating_alternate_details = False
 
     def set_financials_source(self, financials_table: QTableWidget, financials_headers: List[str]):
@@ -4518,11 +4640,15 @@ class AlternatesWidget(QWidget):
         delivery_count = self.delivery_count_edit.text().strip() if self.delivery_count_edit else "0"
         ot_hours = self.ot_hours_edit.text().strip() if self.ot_hours_edit else "0"
         sub_ohp = self.sub_ohp_edit.text().strip() if self.sub_ohp_edit else "0"
+        include_parking = "1" if (self.include_parking_checkbox.isChecked() if self.include_parking_checkbox else True) else "0"
+        include_supervision = "1" if (self.include_supervision_checkbox.isChecked() if self.include_supervision_checkbox else True) else "0"
         self.alternates_details_data[self.current_alternate] = {
             'description': description,
             'delivery_count': delivery_count,
             'ot_hours': ot_hours,
             'sub_ohp': sub_ohp,
+            'include_parking': include_parking,
+            'include_supervision': include_supervision,
         }
     
     def save_to_csv(self):
@@ -4530,13 +4656,12 @@ class AlternatesWidget(QWidget):
         if not self.changes_made:
             return
         
-        # Save openings to Alternates.csv
-        alternates_openings_path = self.workbook_path / "Alternates.csv"
-        alternates_costs_path = self.workbook_path / "Alternates_Costs.csv"
-        alternates_subcontractor_path = self.workbook_path / "Alternates_Subcontractor.csv"
-        alternates_details_path = self.workbook_path / "Alternates_Details.csv"
+        alternates_openings_path = self._managed_csv_path()
+        alternates_costs_path = self._managed_csv_path("_Costs")
+        alternates_subcontractor_path = self._managed_csv_path("_Subcontractor")
+        alternates_details_path = self._managed_csv_path("_Details")
         
-        openings_rows = [["Alternate Number", "Opening #", "Door Type", "Frame Type", "Hardware Group", "Add/Deduct"]]
+        openings_rows = [[self.record_number_header, "Opening #", "Door Type", "Frame Type", "Hardware Group", "Add/Deduct"]]
         for alt_num in sorted(self.alternates_openings_data.keys()):
             for opening in self.alternates_openings_data[alt_num]:
                 opening_num = str(opening[0]) if len(opening) > 0 else ""
@@ -4546,7 +4671,7 @@ class AlternatesWidget(QWidget):
                 add_deduct = self._normalize_add_deduct(str(opening[4]) if len(opening) > 4 else "")
                 openings_rows.append([alt_num, opening_num, door_type, frame_type, hw_group, add_deduct])
 
-        costs_rows = [["Alternate Number", "Description", "Count", "Material per Unit", "Hours per Unit", "Add/Deduct"]]
+        costs_rows = [[self.record_number_header, "Description", "Count", "Material per Unit", "Hours per Unit", "Add/Deduct"]]
         for alt_num in sorted(self.alternates_costs_data.keys()):
             for cost_row in self.alternates_costs_data[alt_num]:
                 desc = str(cost_row[0]) if len(cost_row) > 0 else ""
@@ -4556,7 +4681,7 @@ class AlternatesWidget(QWidget):
                 add_deduct = self._normalize_add_deduct(str(cost_row[4]) if len(cost_row) > 4 else "")
                 costs_rows.append([alt_num, desc, count, material, hours, add_deduct])
 
-        subcontractor_rows = [["Alternate Number", "Description", "Cost", "Add/Deduct"]]
+        subcontractor_rows = [[self.record_number_header, "Description", "Cost", "Add/Deduct"]]
         for alt_num in sorted(self.alternates_subcontractor_data.keys()):
             for subcontractor_row in self.alternates_subcontractor_data[alt_num]:
                 desc = str(subcontractor_row[0]) if len(subcontractor_row) > 0 else ""
@@ -4564,7 +4689,7 @@ class AlternatesWidget(QWidget):
                 add_deduct = self._normalize_add_deduct(str(subcontractor_row[2]) if len(subcontractor_row) > 2 else "")
                 subcontractor_rows.append([alt_num, desc, cost, add_deduct])
 
-        details_rows = [["Alternate Number", "Description", "Delivery Hours", "OT Hours", "Sub OH & P"]]
+        details_rows = [[self.record_number_header, "Description", "Delivery Hours", "OT Hours", "Sub OH & P", "Include Parking", "Include Supervision"]]
         for alt_num in sorted(self.alternates_details_data.keys()):
             details = self.alternates_details_data.get(alt_num, {})
             details_rows.append([
@@ -4573,6 +4698,8 @@ class AlternatesWidget(QWidget):
                 details.get('delivery_count', '0'),
                 details.get('ot_hours', '0'),
                 details.get('sub_ohp', '0'),
+                details.get('include_parking', '1'),
+                details.get('include_supervision', '1'),
             ])
         
         try:
@@ -4580,30 +4707,48 @@ class AlternatesWidget(QWidget):
                 writer = csv.writer(f)
                 writer.writerows(openings_rows)
         except Exception as e:
-            QMessageBox.warning(self, "Save Error", f"Could not save Alternates.csv:\n{e}")
+            QMessageBox.warning(self, "Save Error", f"Could not save {alternates_openings_path.name}:\n{e}")
 
         try:
             with open(alternates_costs_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerows(costs_rows)
         except Exception as e:
-            QMessageBox.warning(self, "Save Error", f"Could not save Alternates_Costs.csv:\n{e}")
+            QMessageBox.warning(self, "Save Error", f"Could not save {alternates_costs_path.name}:\n{e}")
 
         try:
             with open(alternates_subcontractor_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerows(subcontractor_rows)
         except Exception as e:
-            QMessageBox.warning(self, "Save Error", f"Could not save Alternates_Subcontractor.csv:\n{e}")
+            QMessageBox.warning(self, "Save Error", f"Could not save {alternates_subcontractor_path.name}:\n{e}")
 
         try:
             with open(alternates_details_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerows(details_rows)
         except Exception as e:
-            QMessageBox.warning(self, "Save Error", f"Could not save Alternates_Details.csv:\n{e}")
+            QMessageBox.warning(self, "Save Error", f"Could not save {alternates_details_path.name}:\n{e}")
         
         self.changes_made = False
+
+
+class ChangeOrdersWidget(AlternatesWidget):
+    """Custom widget for managing project change orders with the Alternates layout."""
+
+    def __init__(self, workbook_path, schedule_data, parent=None, change_callback=None, storage_path=None, ohp_rate_override: Optional[float] = None):
+        super().__init__(
+            workbook_path,
+            schedule_data,
+            parent=parent,
+            change_callback=change_callback,
+            storage_path=storage_path,
+            item_label_singular="Change Order",
+            item_label_plural="Change Orders",
+            data_file_prefix="Change_Orders",
+            record_number_header="Change Order Number",
+            ohp_rate_override=ohp_rate_override,
+        )
 
 
 

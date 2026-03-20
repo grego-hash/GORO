@@ -523,3 +523,95 @@ class ManageMilestonesDialog(QDialog):
                 "Failed to delete milestone."
             )
 
+
+class ReturnOfflineCopyDialog(QDialog):
+    """Dialog for returning an offline working copy to the live record.
+
+    Presents a summary of changed files and offers three actions:
+    - Apply Changes to Live Record (prompts for a safety milestone name after closing)
+    - Discard Offline Copy (clear flag, no files changed)
+    - Cancel (do nothing)
+    """
+
+    CHOICE_APPLY = "apply"
+    CHOICE_DISCARD = "discard"
+
+    def __init__(self, changes: dict, checkout_info: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Return Offline Copy")
+        self.setMinimumSize(640, 460)
+        self.choice: Optional[str] = None
+
+        layout = QVBoxLayout(self)
+
+        user = checkout_info.get("offline_checked_out_by", "Unknown")
+        started = str(checkout_info.get("offline_checked_out_at", ""))[:10]
+        layout.addWidget(QLabel(f"<b>Offline copy created by {user} on {started}</b>"))
+
+        modified = changes.get("modified", [])
+        added = changes.get("added", [])
+        removed = changes.get("removed", [])
+        total = len(modified) + len(added) + len(removed)
+
+        if total == 0:
+            layout.addWidget(QLabel("\nNo changes were made in this offline copy."))
+        else:
+            summary = (
+                f"{len(modified)} file(s) modified,  "
+                f"{len(added)} file(s) added,  "
+                f"{len(removed)} file(s) removed"
+            )
+            layout.addWidget(QLabel(f"\n<b>Changes detected:</b>  {summary}"))
+
+            self.file_list = QListWidget()
+            for f in modified:
+                itm = QListWidgetItem(f"\u25CF  Modified    {f}")
+                itm.setForeground(QColor("#FFA726"))
+                self.file_list.addItem(itm)
+            for f in added:
+                itm = QListWidgetItem(f"\u25CF  Added       {f}")
+                itm.setForeground(QColor("#66BB6A"))
+                self.file_list.addItem(itm)
+            for f in removed:
+                itm = QListWidgetItem(f"\u25CF  Removed     {f}")
+                itm.setForeground(QColor("#EF5350"))
+                self.file_list.addItem(itm)
+            layout.addWidget(self.file_list)
+
+            layout.addWidget(QLabel(
+                "\n<i>Applying changes will first prompt you to create a milestone on the live\n"
+                "record so you can roll back if needed.</i>"
+            ))
+
+        layout.addWidget(QLabel("\nWhat would you like to do?"))
+
+        btn_layout = QHBoxLayout()
+
+        if total > 0:
+            self.btn_apply = QPushButton("Apply Changes to Live Record")
+            self.btn_apply.clicked.connect(self._apply)
+            btn_layout.addWidget(self.btn_apply)
+
+        label = "Clear Offline Flag" if total == 0 else "Discard Offline Copy"
+        self.btn_discard = QPushButton(label)
+        self.btn_discard.clicked.connect(self._discard)
+        btn_layout.addWidget(self.btn_discard)
+
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(self.btn_cancel)
+
+        layout.addLayout(btn_layout)
+        self._has_changes = total > 0
+
+    def _apply(self):
+        self.choice = self.CHOICE_APPLY
+        self.accept()
+
+    def _discard(self):
+        self.choice = self.CHOICE_DISCARD
+        self.accept()
+
+    def has_changes(self) -> bool:
+        return self._has_changes
+

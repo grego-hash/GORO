@@ -27,6 +27,7 @@ class GOROApp:
         self.home_screen.navigate_to_customers.connect(self.show_customers)
         self.home_screen.navigate_to_my_company.connect(self.show_my_company)
         self.home_screen.navigate_to_preferences.connect(self.show_preferences)
+        self.home_screen.navigate_to_quoted_lookup.connect(self.show_quoted_lookup)
         self.stacked_widget.addWidget(self.home_screen)
 
         settings = QSettings(ORG_NAME, APP_NAME)
@@ -171,6 +172,12 @@ class GOROApp:
         window = self._ensure_main_window()
 
         window.open_preferences()
+
+    def show_quoted_lookup(self):
+        """Open quoted pricing lookup from the Home screen."""
+        window = self._show_main_window()
+        if hasattr(window, "open_quoted_lookup_from_home"):
+            window.open_quoted_lookup_from_home()
 
     def _maybe_show_first_install_tutorial(self):
         """Show the first-install setup tutorial once per user profile."""
