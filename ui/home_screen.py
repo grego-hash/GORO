@@ -702,10 +702,12 @@ class HomeScreen(QWidget):
         if not fp.exists() or not fp.is_file():
             return {}
         try:
-            # Skip suspiciously large files to keep Home KPI loading responsive.
-            if fp.stat().st_size > 512_000:
+            # Read with a hard cap to avoid full-file blocking reads on startup.
+            max_bytes = 512_000
+            with open(fp, "rb") as fh:
+                raw = fh.read(max_bytes + 1)
+            if len(raw) > max_bytes:
                 return {}
-            raw = fp.read_bytes()
             if not raw:
                 return {}
             payload = json.loads(raw.decode("utf-8", errors="ignore"))
@@ -1441,7 +1443,8 @@ class HomeScreen(QWidget):
         if not self._tab_order_applied:
             self._apply_tab_order()
         QTimer.singleShot(0, lambda: self.refresh_overview_stats(time_budget_seconds=1.5))
-        QTimer.singleShot(350, lambda: self.refresh_overview_stats(time_budget_seconds=None))
+        # Keep startup refresh bounded to prevent long UI stalls on large datasets.
+        QTimer.singleShot(350, lambda: self.refresh_overview_stats(time_budget_seconds=2.0))
     
     def apply_theme(self, theme_colors: dict):
         """Apply theme colors to the home screen."""

@@ -14732,7 +14732,18 @@ class MainWindow(QMainWindow):
                 header_layout.setContentsMargins(0, 0, 0, 0)
                 header_layout.setSpacing(4)
 
-                company_label = QLabel("Stockham Construction")
+                _company_name = ""
+                try:
+                    _ci_path = self.paths.root / "company_info.csv"
+                    if _ci_path.exists():
+                        import csv as _csv
+                        with open(_ci_path, "r", newline="", encoding="utf-8-sig") as _f:
+                            for _row in _csv.DictReader(_f):
+                                _company_name = _row.get("Company Name", "").strip()
+                                break
+                except Exception:
+                    pass
+                company_label = QLabel(_company_name)
                 company_label.setStyleSheet("font-size: 20px; font-weight: 700;")
                 company_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 header_layout.addWidget(company_label)

@@ -211,6 +211,48 @@ function Resolve-GitPath {
     return $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 
+function Resolve-GitHubToken {
+    param(
+        [string]$ExplicitToken,
+        [string]$ProjectRoot
+    )
+
+    $candidateValues = @(
+        $ExplicitToken,
+        $env:GITHUB_TOKEN,
+        $env:GH_TOKEN
+    )
+
+    foreach ($candidate in $candidateValues) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+            $normalized = $candidate.Trim().Trim('"').Trim("'")
+            if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+                return $normalized
+            }
+        }
+    }
+
+    $tokenFiles = @(
+        (Join-Path $ProjectRoot ".github_token"),
+        (Join-Path $env:USERPROFILE ".goro\github_token.txt")
+    )
+
+    foreach ($tokenFile in $tokenFiles) {
+        if (Test-Path $tokenFile) {
+            try {
+                $fileToken = (Get-Content -Path $tokenFile -Raw -ErrorAction Stop).Trim().Trim('"').Trim("'")
+                if (-not [string]::IsNullOrWhiteSpace($fileToken)) {
+                    return $fileToken
+                }
+            } catch {
+                # Ignore token file read errors and continue searching.
+            }
+        }
+    }
+
+    return ""
+}
+
 function Publish-GitHubRelease {
     param(
         [string]$Token,
@@ -231,8 +273,7 @@ function Publish-GitHubRelease {
     Write-Host "[GitHub] Creating release $tag..."
     $body = @{ tag_name = $tag; name = "GORO $tag"; body = $Notes; draft = $false; prerelease = $false } | ConvertTo-Json
     try {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases" `
-            -Method Post -Headers $headers -Body $body -ContentType 'application/json'
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases" -Method Post -Headers $headers -Body $body -ContentType 'application/json'
     } catch {
         Write-Warning "GitHub release creation failed: $_"
         return $null
@@ -244,12 +285,10 @@ function Publish-GitHubRelease {
     $uploadHdrs = $headers.Clone()
     $uploadHdrs['Accept'] = 'application/vnd.github+json'
     try {
-        Invoke-RestMethod -Uri "${uploadUrl}?name=$fileName" `
-            -Method Post -Headers $uploadHdrs `
-            -InFile $InstallerPath -ContentType 'application/octet-stream' | Out-Null
+        Invoke-RestMethod -Uri "${uploadUrl}?name=$fileName" -Method Post -Headers $uploadHdrs -InFile $InstallerPath -ContentType 'application/octet-stream' | Out-Null
     } catch {
         Write-Warning "Asset upload failed: $_"
-        Write-Warning "Release was created at $($release.html_url) — upload the installer manually."
+        Write-Warning "Release was created at $($release.html_url) - upload the installer manually."
         return $release
     }
 
@@ -265,7 +304,7 @@ function Push-ReleaseToGit {
 
     $gitPath = Resolve-GitPath
     if (-not $gitPath) {
-        Write-Warning 'git not found — skipping commit and push. Push manually.'
+        Write-Warning 'git not found - skipping commit and push. Push manually.'
         return
     }
 
@@ -278,10 +317,29 @@ function Push-ReleaseToGit {
             return
         }
         Write-Host "[git] $commitOut"
-        & $gitPath push 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        $pushStdOut = [System.IO.Path]::GetTempFileName()
+        $pushStdErr = [System.IO.Path]::GetTempFileName()
+        try {
+            $pushProc = Start-Process -FilePath $gitPath -ArgumentList 'push' -NoNewWindow -Wait -PassThru -RedirectStandardOutput $pushStdOut -RedirectStandardError $pushStdErr
+            $pushOutput = (Get-Content -Path $pushStdOut -Raw -ErrorAction SilentlyContinue)
+            $pushError = (Get-Content -Path $pushStdErr -Raw -ErrorAction SilentlyContinue)
+        } finally {
+            Remove-Item -Path $pushStdOut -ErrorAction SilentlyContinue
+            Remove-Item -Path $pushStdErr -ErrorAction SilentlyContinue
+        }
+
+        if ($pushProc.ExitCode -eq 0) {
+            if (-not [string]::IsNullOrWhiteSpace($pushOutput)) {
+                Write-Host "[git] $pushOutput"
+            }
+            if (-not [string]::IsNullOrWhiteSpace($pushError)) {
+                Write-Host "[git] $pushError"
+            }
             Write-Host "[git] Pushed release commit for v$Version to GitHub."
         } else {
+            if (-not [string]::IsNullOrWhiteSpace($pushError)) {
+                Write-Warning $pushError
+            }
             Write-Warning 'git push failed. Push manually: git push'
         }
     } finally {
@@ -395,27 +453,37 @@ try {
 
     # --- GitHub Release ---
     if (-not $SkipGitHubRelease) {
-        $token = $GitHubToken
-        if ([string]::IsNullOrWhiteSpace($token)) { $token = $env:GITHUB_TOKEN }
+        $token = Resolve-GitHubToken -ExplicitToken $GitHubToken -ProjectRoot $projectRoot
 
         if ([string]::IsNullOrWhiteSpace($token)) {
             Write-Warning ''
-            Write-Warning 'No GitHub token found — skipping automatic GitHub Release.'
-            Write-Warning 'To enable: set $env:GITHUB_TOKEN = "ghp_..." or pass -GitHubToken "ghp_..."'
+            Write-Warning 'No GitHub token found - skipping automatic GitHub Release.'
+            Write-Warning 'To enable: set $env:GITHUB_TOKEN or $env:GH_TOKEN, pass -GitHubToken, or create .github_token in the project root.'
             Write-Warning 'Then manually create a release at https://github.com/grego-hash/GORO/releases'
             Write-Warning 'and upload the installer from the installers\ folder.'
-        } else {
-            # Find the installer so we can upload it
-            $installersDir = if ([System.IO.Path]::IsPathRooted($InstallerOutputDir)) { $InstallerOutputDir } else { Join-Path $projectRoot $InstallerOutputDir }
+        }
+        else {
+            if ([System.IO.Path]::IsPathRooted($InstallerOutputDir)) {
+                $installersDir = $InstallerOutputDir
+            }
+            else {
+                $installersDir = Join-Path $projectRoot $InstallerOutputDir
+            }
+
             $installer = Get-ChildItem -Path $installersDir -File -Filter "GORO-Setup-$AppVersion-*.exe" |
-                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
 
             if (-not $installer) {
-                Write-Warning "Installer not found in $installersDir — skipping GitHub Release."
-            } else {
-                $notes = if ($ReleaseNotes) { $ReleaseNotes } else { '' }
-                Publish-GitHubRelease -Token $token -Owner 'grego-hash' -Repo 'GORO' `
-                    -Version $AppVersion -Notes $notes -InstallerPath $installer.FullName
+                Write-Warning "Installer not found in $installersDir - skipping GitHub Release."
+            }
+            else {
+                $notes = ''
+                if ($ReleaseNotes) {
+                    $notes = $ReleaseNotes
+                }
+
+                Publish-GitHubRelease -Token $token -Owner 'grego-hash' -Repo 'GORO' -Version $AppVersion -Notes $notes -InstallerPath $installer.FullName
             }
         }
     }

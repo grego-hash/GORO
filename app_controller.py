@@ -1,7 +1,7 @@
 ﻿import sys
 
 from PyQt6.QtCore import QSettings, QTimer
-from PyQt6.QtWidgets import QSizePolicy, QStackedWidget
+from PyQt6.QtWidgets import QMessageBox, QSizePolicy, QStackedWidget
 
 from core.constants import APP_NAME, APP_DISPLAY_NAME, ORG_NAME
 from ui.home_screen import HomeScreen
@@ -172,9 +172,97 @@ class GOROApp:
 
         window.open_preferences()
 
+    def _maybe_show_first_install_tutorial(self):
+        """Show the first-install setup tutorial once per user profile."""
+        settings = QSettings(ORG_NAME, APP_NAME)
+        tutorial_done = settings.value("first_install_tutorial_completed", False, type=bool)
+        if tutorial_done:
+            return
+
+        prompt = QMessageBox(self.stacked_widget)
+        prompt.setIcon(QMessageBox.Icon.Information)
+        prompt.setWindowTitle("Welcome to GORO")
+        prompt.setText("First-time setup tutorial")
+        prompt.setInformativeText(
+            "This quick setup will guide you through:\n"
+            "1) Choosing a custom Data folder\n"
+            "2) Entering My Company details\n"
+            "3) Setting your active user in Preferences"
+        )
+        start_btn = prompt.addButton("Start Setup", QMessageBox.ButtonRole.AcceptRole)
+        skip_btn = prompt.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
+        later_btn = prompt.addButton("Later", QMessageBox.ButtonRole.DestructiveRole)
+        prompt.setDefaultButton(start_btn)
+        prompt.exec()
+
+        clicked = prompt.clickedButton()
+        if clicked == start_btn:
+            self._run_first_install_tutorial()
+            settings.setValue("first_install_tutorial_completed", True)
+        elif clicked == skip_btn:
+            settings.setValue("first_install_tutorial_completed", True)
+        else:
+            # Later: ask again on next startup until completed or skipped.
+            pass
+
+    def _run_first_install_tutorial(self):
+        """Run guided first-install setup steps."""
+        window = self._show_main_window()
+
+        QMessageBox.information(
+            window,
+            "Setup Step 1 of 3",
+            "Choose your Data folder now.\n\n"
+            "Recommended: pick a location outside the app install folder "
+            "(for example OneDrive or a shared company directory).",
+        )
+        previous_root = str(getattr(window.paths, "root", ""))
+        if hasattr(window, "choose_data_folder"):
+            window.choose_data_folder()
+        current_root = str(getattr(window.paths, "root", ""))
+        if current_root and current_root != previous_root:
+            QMessageBox.information(
+                window,
+                "Data Folder Updated",
+                f"Data folder set to:\n{current_root}",
+            )
+        else:
+            QMessageBox.information(
+                window,
+                "Data Folder Unchanged",
+                "No folder was selected, so the current Data folder was kept.",
+            )
+
+        QMessageBox.information(
+            window,
+            "Setup Step 2 of 3",
+            "Next: set up your company profile and contacts/users.\n\n"
+            "In My Company, add your company details and add contacts.\n"
+            "Use the Position column for roles like Estimator or Project Manager.",
+        )
+        window.open_my_company()
+
+        QMessageBox.information(
+            window,
+            "Setup Step 3 of 3",
+            "Last: choose your active username in Preferences.\n\n"
+            "Tip: usernames are pulled from My Company contacts.",
+        )
+        window.open_preferences()
+
+        QMessageBox.information(
+            window,
+            "Setup Complete",
+            "Initial setup is complete. You can revisit these anytime from Home:\n"
+            "- Preferences (for Data folder and username)\n"
+            "- My Company (for company details and contacts/users)",
+        )
+
     def show(self):
         """Show the application window."""
         self.stacked_widget.showMaximized()
+
+        QTimer.singleShot(400, self._maybe_show_first_install_tutorial)
 
         if sys.platform == "win32":
             settings = QSettings(ORG_NAME, APP_NAME)

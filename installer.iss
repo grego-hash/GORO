@@ -5,7 +5,7 @@
 #ifndef InstallerOutputDir
 	#define InstallerOutputDir "installers"
 #endif
-#define MyAppPublisher "Stockham Construction, Inc"
+#define MyAppPublisher "GORO Software"
 #define MyAppExeName "GORO.exe"
 #define TesseractInstallerName "tesseract-ocr-w64-setup-5.5.0.20241111.exe"
 #define BuildStamp GetDateTimeString('yyyy-mm-dd_HHNN', '-', ':')
@@ -36,7 +36,10 @@ Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Ad
 
 [Files]
 ; Recursive copy includes bundled runtime dependencies such as Poppler.
-Source: "dist\GORO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Exclude user data CSVs from the overwrite pass so existing data is preserved on update.
+Source: "dist\GORO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "data\*.csv"
+; User data CSV files: only installed when they do not already exist (fresh install only).
+Source: "data\*.csv"; DestDir: "{app}\data"; Flags: onlyifdoesntexist
 ; Include the official Tesseract installer so GORO setup can provision OCR automatically.
 Source: "tools\installers\{#TesseractInstallerName}"; DestDir: "{tmp}"; Flags: deleteafterinstall ignoreversion; Check: FileExists(ExpandConstant('{src}\tools\installers\{#TesseractInstallerName}'))
 

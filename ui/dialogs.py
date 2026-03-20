@@ -531,6 +531,9 @@ class PreferencesDialog(QDialog):
         self.btn_check_updates = QPushButton("Check for Updates")
         self.btn_check_updates.clicked.connect(self._check_for_updates)
         updates_row.addWidget(self.btn_check_updates)
+        self.btn_run_setup_tutorial = QPushButton("Run Setup Tutorial")
+        self.btn_run_setup_tutorial.clicked.connect(self._run_setup_tutorial)
+        updates_row.addWidget(self.btn_run_setup_tutorial)
         updates_row.addStretch()
         layout.addLayout(updates_row)
 
@@ -658,6 +661,64 @@ class PreferencesDialog(QDialog):
     def _check_for_updates(self):
         """Manually trigger an update check."""
         check_for_updates_manual(self, self.settings, APP_VERSION)
+
+    def _run_setup_tutorial(self):
+        """Run the first-install setup tutorial on demand."""
+        parent_window = self.parent()
+        if parent_window is None:
+            QMessageBox.warning(self, "Setup Tutorial", "Could not find the main window.")
+            return
+
+        QMessageBox.information(
+            self,
+            "Setup Step 1 of 3",
+            "Choose your Data folder now.\n\n"
+            "Recommended: pick a location outside the app install folder "
+            "(for example OneDrive or a shared company directory).",
+        )
+
+        previous_root = str(getattr(getattr(parent_window, "paths", None), "root", ""))
+        if hasattr(parent_window, "choose_data_folder"):
+            parent_window.choose_data_folder()
+        current_root = str(getattr(getattr(parent_window, "paths", None), "root", ""))
+        if current_root and current_root != previous_root:
+            QMessageBox.information(
+                self,
+                "Data Folder Updated",
+                f"Data folder set to:\n{current_root}",
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Data Folder Unchanged",
+                "No folder was selected, so the current Data folder was kept.",
+            )
+
+        QMessageBox.information(
+            self,
+            "Setup Step 2 of 3",
+            "Next: set up your company profile and contacts/users.\n\n"
+            "In My Company, add your company details and add contacts.\n"
+            "Use the Position column for roles like Estimator or Project Manager.",
+        )
+        if hasattr(parent_window, "open_my_company"):
+            parent_window.open_my_company()
+
+        QMessageBox.information(
+            self,
+            "Setup Step 3 of 3",
+            "Last: choose your active username here in Preferences.\n\n"
+            "Tip: usernames are pulled from My Company contacts.\n"
+            "Click Save when done.",
+        )
+
+        self.settings.setValue("first_install_tutorial_completed", True)
+        QMessageBox.information(
+            self,
+            "Setup Complete",
+            "Setup tutorial completed.\n"
+            "You can run it again any time from Preferences.",
+        )
 
     def _save_and_accept(self):
         """Save preferences and update users.csv."""
