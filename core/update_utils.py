@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import QMessageBox, QWidget
 from PyQt6.QtCore import QUrl
 
 from core.constants import (
+    DEFAULT_GITHUB_RELEASE_API_URL,
     DEFAULT_UPDATE_MANIFEST_URL,
     UPDATE_CHECK_INTERVAL_HOURS,
     UPDATE_REQUEST_TIMEOUT_SECONDS,
@@ -75,6 +76,33 @@ def _parse_manifest(payload: dict[str, Any]) -> UpdateInfo | None:
     return UpdateInfo(latest_version=latest_version, download_url=download_url, release_notes=release_notes)
 
 
+def _parse_github_release(payload: dict[str, Any]) -> UpdateInfo | None:
+    tag_name = str(payload.get("tag_name") or "").strip()
+    latest_version = tag_name.removeprefix("v")
+    if not latest_version:
+        return None
+
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        return None
+
+    download_url = ""
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "").strip().lower()
+        browser_download_url = str(asset.get("browser_download_url") or "").strip()
+        if name.endswith(".exe") and browser_download_url:
+            download_url = browser_download_url
+            break
+
+    if not download_url:
+        return None
+
+    release_notes = str(payload.get("body") or "").strip()
+    return UpdateInfo(latest_version=latest_version, download_url=download_url, release_notes=release_notes)
+
+
 def _fetch_manifest(manifest_url: str, timeout_seconds: int) -> dict[str, Any] | None:
     request = Request(
         manifest_url,
@@ -92,6 +120,42 @@ def _fetch_manifest(manifest_url: str, timeout_seconds: int) -> dict[str, Any] |
             return None
     except (URLError, TimeoutError, json.JSONDecodeError, OSError):
         return None
+
+
+def _resolve_release_api_url(settings: QSettings) -> str:
+    release_api_url = str(settings.value("updates/release_api_url", "")).strip()
+    if release_api_url:
+        return release_api_url
+
+    release_api_url = os.environ.get("GORO_UPDATE_RELEASE_API_URL", "").strip()
+    if release_api_url:
+        return release_api_url
+
+    return DEFAULT_GITHUB_RELEASE_API_URL.strip()
+
+
+def _fetch_remote_update_info(settings: QSettings) -> UpdateInfo | None:
+    manifest_url = _resolve_remote_manifest_url(settings)
+    if manifest_url:
+        payload = _fetch_manifest(manifest_url, UPDATE_REQUEST_TIMEOUT_SECONDS)
+        if payload is not None:
+            update = _parse_manifest(payload)
+            if update is not None:
+                return update
+
+            update = _parse_github_release(payload)
+            if update is not None:
+                return update
+
+    release_api_url = _resolve_release_api_url(settings)
+    if release_api_url and release_api_url != manifest_url:
+        payload = _fetch_manifest(release_api_url, UPDATE_REQUEST_TIMEOUT_SECONDS)
+        if payload is not None:
+            update = _parse_github_release(payload)
+            if update is not None:
+                return update
+
+    return None
 
 
 def _resolve_remote_manifest_url(settings: QSettings) -> str:
@@ -193,23 +257,19 @@ def check_for_updates_manual(
 ) -> None:
     """Manually triggered update check — bypasses throttle and always gives feedback."""
     manifest_url = _resolve_remote_manifest_url(settings)
-    if not manifest_url:
-        QMessageBox.information(parent, "Check for Updates", "No update manifest URL is configured.")
+    release_api_url = _resolve_release_api_url(settings)
+    if not manifest_url and not release_api_url:
+        QMessageBox.information(parent, "Check for Updates", "No update source is configured.")
         return
 
-    payload = _fetch_manifest(manifest_url, UPDATE_REQUEST_TIMEOUT_SECONDS)
-    if not payload:
+    update = _fetch_remote_update_info(settings)
+    if not update:
         QMessageBox.information(
             parent,
             "Check for Updates",
             "Could not reach the online update server.\n\n"
             "Please verify internet access and try again.",
         )
-        return
-
-    update = _parse_manifest(payload)
-    if not update:
-        QMessageBox.information(parent, "Check for Updates", "Update manifest is invalid or unreadable.")
         return
 
     if not update.download_url:
@@ -237,16 +297,12 @@ def check_for_updates_on_startup(
         return
 
     manifest_url = _resolve_remote_manifest_url(settings)
-    if not manifest_url:
+    release_api_url = _resolve_release_api_url(settings)
+    if not manifest_url and not release_api_url:
         return
-
-    payload = _fetch_manifest(manifest_url, UPDATE_REQUEST_TIMEOUT_SECONDS)
 
     _record_check_time(settings)
-    if not payload:
-        return
-
-    update = _parse_manifest(payload)
+    update = _fetch_remote_update_info(settings)
     if not update:
         return
 

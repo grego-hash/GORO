@@ -16,6 +16,7 @@ APP_DISPLAY_NAME = f"GORO {APP_VERSION}"
 UPDATE_CHECK_INTERVAL_HOURS = 0
 UPDATE_REQUEST_TIMEOUT_SECONDS = 8
 DEFAULT_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/grego-hash/GORO/main/updates.json"
+DEFAULT_GITHUB_RELEASE_API_URL = "https://api.github.com/repos/grego-hash/GORO/releases/latest"
 
 DEFAULT_NAME_TEMPLATES = {
     "bids": "Bid_{YYYY}-{###}",
