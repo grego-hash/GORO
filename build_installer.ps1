@@ -105,7 +105,8 @@ function Update-UpdateManifest {
     function Get-ResolvedDownloadUrl {
         param(
             [string]$ExistingUrl,
-            [System.IO.FileInfo]$InstallerFile
+            [System.IO.FileInfo]$InstallerFile,
+            [string]$NewVersion
         )
 
         $defaultUrl = $InstallerFile.Name
@@ -120,7 +121,10 @@ function Update-UpdateManifest {
 
         $installerNameMatch = [regex]::Match($trimmed, 'GORO-Setup-[^/?#\\]+\.exe')
         if ($installerNameMatch.Success) {
-            return $trimmed.Substring(0, $installerNameMatch.Index) + $InstallerFile.Name + $trimmed.Substring($installerNameMatch.Index + $installerNameMatch.Length)
+            $updated = $trimmed.Substring(0, $installerNameMatch.Index) + $InstallerFile.Name + $trimmed.Substring($installerNameMatch.Index + $installerNameMatch.Length)
+            # Also update the GitHub Release tag version (e.g. releases/download/v2.5.1/ -> v2.5.2/)
+            $updated = [regex]::Replace($updated, '(?<=/releases/download/)v[^/]+(?=/)', "v$NewVersion")
+            return $updated
         }
 
         return $trimmed
@@ -175,7 +179,7 @@ function Update-UpdateManifest {
         }
 
         $manifestObj | Add-Member -NotePropertyName "latest_version" -NotePropertyValue $Version -Force
-        $manifestObj | Add-Member -NotePropertyName "download_url" -NotePropertyValue (Get-ResolvedDownloadUrl -ExistingUrl $existingDownloadUrl -InstallerFile $installer) -Force
+        $manifestObj | Add-Member -NotePropertyName "download_url" -NotePropertyValue (Get-ResolvedDownloadUrl -ExistingUrl $existingDownloadUrl -InstallerFile $installer -NewVersion $Version) -Force
         $manifestObj | Add-Member -NotePropertyName "release_notes" -NotePropertyValue $existingReleaseNotes -Force
 
         $manifestDir = Split-Path -Parent $manifestPath

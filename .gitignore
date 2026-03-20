@@ -10,6 +10,14 @@ __pycache__/
 build/
 dist/
 
+# Installer binaries — released via GitHub Releases, not source control
+installers/
+
+# Bundled third-party binaries — downloaded by tools/setup_*.ps1, not source control
+tools/poppler-windows/
+tools/installers/
+tools/tesseract-ocr/
+
 # Local logs and debug output
 *.log
 *_debug.log
