@@ -8,7 +8,7 @@ from PyQt6.QtGui import QColor
 
 ORG_NAME = "OropezaApps"
 APP_NAME = "GORO 2.3"
-APP_VERSION = "2.5.8"
+APP_VERSION = "2.5.9"
 APP_ID = "OropezaApps.GORO"
 APP_DISPLAY_NAME = f"GORO {APP_VERSION}"
 
@@ -28,6 +28,7 @@ PROJECT_STATUSES = ["Submittals", "Production", "Installation", "Punchlist", "Co
 
 # Light red for overdue rows
 OVERDUE_BG = QColor(255, 235, 235)
+
 
 
 
