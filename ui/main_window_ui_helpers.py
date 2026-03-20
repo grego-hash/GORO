@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QCalendarWidget,
+    QDialog,
     QFileDialog as QtFileDialog,
     QInputDialog as QtInputDialog,
     QLineEdit,
@@ -23,21 +24,27 @@ def _resolve_transient_parent(parent: Optional[QWidget] = None) -> Optional[QWid
     else:
         resolved_parent = None
 
+    # Keep popups tied to an explicitly provided modal dialog parent.
+    if isinstance(resolved_parent, QDialog) and resolved_parent.isModal():
+        return resolved_parent
+
     active_modal = QApplication.activeModalWidget()
     if isinstance(active_modal, QWidget) and active_modal.isVisible():
         return active_modal
 
     active_window = QApplication.activeWindow()
-    if not isinstance(active_window, QWidget) or not active_window.isVisible():
-        return resolved_parent
+    if isinstance(active_window, QWidget) and active_window.isVisible():
+        if resolved_parent is None:
+            return active_window
 
-    if resolved_parent is None:
-        return active_window
+        parent_window = resolved_parent.window()
+        active_top_level = active_window.window()
 
-    parent_window = resolved_parent.window()
-    active_top_level = active_window.window()
-    if active_top_level is not parent_window:
-        return active_window
+        # Prefer the actively focused window whenever it differs from the
+        # provided parent window. This keeps workbook popups from activating
+        # the main bids/projects layout.
+        if active_top_level is not parent_window:
+            return active_window
 
     return resolved_parent
 

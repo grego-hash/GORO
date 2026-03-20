@@ -14,7 +14,7 @@ APP_DISPLAY_NAME = f"GORO {APP_VERSION}"
 
 # 0 means check for updates on every app startup.
 UPDATE_CHECK_INTERVAL_HOURS = 0
-UPDATE_REQUEST_TIMEOUT_SECONDS = 3
+UPDATE_REQUEST_TIMEOUT_SECONDS = 8
 DEFAULT_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/grego-hash/GORO/main/updates.json"
 
 DEFAULT_NAME_TEMPLATES = {

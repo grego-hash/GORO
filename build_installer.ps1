@@ -197,9 +197,8 @@ function Update-UpdateManifest {
     }
 
     $manifestPaths = @(
-        (Join-Path $ProjectRoot "data\updates.json"),
         (Join-Path $ProjectRoot "updates.json")
-    ) | Select-Object -Unique
+    )
 
     foreach ($manifestPath in $manifestPaths) {
         $manifestObj = $null
@@ -352,7 +351,7 @@ function Push-ReleaseToGit {
 
     Push-Location $ProjectRoot
     try {
-        & $gitPath add core\constants.py updates.json data\updates.json 2>&1 | Out-Null
+        & $gitPath add core\constants.py updates.json 2>&1 | Out-Null
         $commitOut = & $gitPath commit -m "release: v$Version" 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Warning 'Nothing to commit or commit failed. Skipping push.'

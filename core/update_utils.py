@@ -11,7 +11,6 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
-from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import QSettings
@@ -24,7 +23,6 @@ from core.constants import (
     UPDATE_CHECK_INTERVAL_HOURS,
     UPDATE_REQUEST_TIMEOUT_SECONDS,
 )
-from core.models import resolve_data_root
 
 
 @dataclass(frozen=True)
@@ -77,56 +75,6 @@ def _parse_manifest(payload: dict[str, Any]) -> UpdateInfo | None:
     return UpdateInfo(latest_version=latest_version, download_url=download_url, release_notes=release_notes)
 
 
-def _is_absolute_url(value: str) -> bool:
-    if not value:
-        return False
-    parsed = urlparse(value)
-    return bool(parsed.scheme)
-
-
-def _resolve_local_installer_url(manifest_path: Path, update: UpdateInfo) -> str:
-    # Hosted URLs are usable as-is.
-    if _is_absolute_url(update.download_url):
-        parsed = urlparse(update.download_url)
-        if parsed.scheme.lower() in {"http", "https"}:
-            return update.download_url
-
-        # For local file URLs, prefer same-folder resolution by filename.
-        if parsed.scheme.lower() == "file":
-            installer_name = Path(parsed.path).name
-            if installer_name:
-                candidate = (manifest_path.parent / installer_name).resolve()
-                if candidate.is_file():
-                    return candidate.as_uri()
-
-    # Relative installer path in manifest: resolve relative to manifest folder.
-    if update.download_url:
-        absolute_hint = Path(update.download_url)
-        if absolute_hint.is_absolute():
-            installer_name = absolute_hint.name
-            if installer_name:
-                candidate = (manifest_path.parent / installer_name).resolve()
-                if candidate.is_file():
-                    return candidate.as_uri()
-
-        candidate = (manifest_path.parent / update.download_url).resolve()
-        if candidate.is_file():
-            return candidate.as_uri()
-
-    # No path provided (or file missing): find installer in the same folder.
-    version = re.escape(update.latest_version)
-    pattern = f"GORO-Setup-{version}-*.exe"
-    matches = sorted(
-        manifest_path.parent.glob(pattern),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    if matches:
-        return matches[0].resolve().as_uri()
-
-    return ""
-
-
 def _fetch_manifest(manifest_url: str, timeout_seconds: int) -> dict[str, Any] | None:
     request = Request(
         manifest_url,
@@ -144,33 +92,6 @@ def _fetch_manifest(manifest_url: str, timeout_seconds: int) -> dict[str, Any] |
             return None
     except (URLError, TimeoutError, json.JSONDecodeError, OSError):
         return None
-
-
-def _fetch_manifest_file(manifest_path: Path) -> dict[str, Any] | None:
-    try:
-        # Accept UTF-8 files both with and without BOM.
-        body = manifest_path.read_text(encoding="utf-8-sig")
-        payload = json.loads(body)
-        if isinstance(payload, dict):
-            return payload
-        return None
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
-
-
-def _resolve_local_manifest_path(settings: QSettings) -> Path | None:
-    configured_path = str(settings.value("updates/manifest_path", "")).strip()
-    if configured_path:
-        candidate = Path(configured_path)
-        if candidate.exists() and candidate.is_file():
-            return candidate
-
-    root = resolve_data_root(settings)
-
-    candidate = root / "updates.json"  # inside selected data folder
-    if candidate.exists() and candidate.is_file():
-        return candidate
-    return None
 
 
 def _resolve_remote_manifest_url(settings: QSettings) -> str:
@@ -271,40 +192,25 @@ def check_for_updates_manual(
     current_version: str,
 ) -> None:
     """Manually triggered update check — bypasses throttle and always gives feedback."""
-    payload = None
-    used_local_manifest = False
-
     manifest_url = _resolve_remote_manifest_url(settings)
-    if manifest_url:
-        payload = _fetch_manifest(manifest_url, UPDATE_REQUEST_TIMEOUT_SECONDS)
+    if not manifest_url:
+        QMessageBox.information(parent, "Check for Updates", "No update manifest URL is configured.")
+        return
 
-    local_manifest = _resolve_local_manifest_path(settings)
-    if not payload and local_manifest is not None:
-        used_local_manifest = True
-        payload = _fetch_manifest_file(local_manifest)
-        if payload is None:
-            QMessageBox.information(
-                parent,
-                "Check for Updates",
-                f"Found update manifest at:\n{local_manifest}\n\nBut it is not valid JSON.",
-            )
-            return
-
+    payload = _fetch_manifest(manifest_url, UPDATE_REQUEST_TIMEOUT_SECONDS)
     if not payload:
-        QMessageBox.information(parent, "Check for Updates", "No update manifest found. Could not check for updates.")
+        QMessageBox.information(
+            parent,
+            "Check for Updates",
+            "Could not reach the online update server.\n\n"
+            "Please verify internet access and try again.",
+        )
         return
 
     update = _parse_manifest(payload)
     if not update:
         QMessageBox.information(parent, "Check for Updates", "Update manifest is invalid or unreadable.")
         return
-
-    if used_local_manifest and local_manifest is not None:
-        update = UpdateInfo(
-            latest_version=update.latest_version,
-            download_url=_resolve_local_installer_url(local_manifest, update),
-            release_notes=update.release_notes,
-        )
 
     if not update.download_url:
         QMessageBox.information(parent, "Check for Updates", "Update manifest found, but download_url is missing or invalid.")
@@ -330,17 +236,11 @@ def check_for_updates_on_startup(
     if not _should_check_now(settings, UPDATE_CHECK_INTERVAL_HOURS):
         return
 
-    payload = None
-    used_local_manifest = False
-
     manifest_url = _resolve_remote_manifest_url(settings)
-    if manifest_url:
-        payload = _fetch_manifest(manifest_url, UPDATE_REQUEST_TIMEOUT_SECONDS)
+    if not manifest_url:
+        return
 
-    local_manifest = _resolve_local_manifest_path(settings)
-    if not payload and local_manifest is not None:
-        used_local_manifest = True
-        payload = _fetch_manifest_file(local_manifest)
+    payload = _fetch_manifest(manifest_url, UPDATE_REQUEST_TIMEOUT_SECONDS)
 
     _record_check_time(settings)
     if not payload:
@@ -349,13 +249,6 @@ def check_for_updates_on_startup(
     update = _parse_manifest(payload)
     if not update:
         return
-
-    if used_local_manifest and local_manifest is not None:
-        update = UpdateInfo(
-            latest_version=update.latest_version,
-            download_url=_resolve_local_installer_url(local_manifest, update),
-            release_notes=update.release_notes,
-        )
 
     if not update.download_url:
         return

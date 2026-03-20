@@ -18167,6 +18167,7 @@ class MainWindow(QMainWindow):
             sch_total_col = None
             sch_width_col = None
             sch_count_col = None
+            sch_wall_size_col = None
             for idx, header in enumerate(schedule_headers):
                 h_lower = header.strip().lower()
                 if h_lower == "door type":
@@ -18197,6 +18198,8 @@ class MainWindow(QMainWindow):
                     sch_width_col = idx + 1
                 elif h_lower in ("count", "qty", "quantity"):
                     sch_count_col = idx + 1
+                elif h_lower in ("wall size", "wall sizes", "wall thickness", "wall thick", "wallthick"):
+                    sch_wall_size_col = idx + 1
 
             if sch_total_col is None:
                 for idx, header in enumerate(schedule_headers):
@@ -19183,6 +19186,7 @@ class MainWindow(QMainWindow):
                 assert schedule_table is not None
                 door_counts = {}
                 frame_counts = {}
+                frame_wall_size_counts = {}
                 for r in range(schedule_table.rowCount()):
                     if sch_door_type_col is not None:
                         dt_item = schedule_table.item(r, sch_door_type_col)
@@ -19194,10 +19198,28 @@ class MainWindow(QMainWindow):
                         ft_key = _type_key(ft_item.text() if ft_item else "")
                         if ft_key:
                             frame_counts[ft_key] = frame_counts.get(ft_key, 0) + 1
-                return door_counts, frame_counts
+
+                            wall_size = ""
+                            if sch_wall_size_col is not None:
+                                ws_item = schedule_table.item(r, sch_wall_size_col)
+                                wall_size = ws_item.text().strip() if ws_item else ""
+
+                            if wall_size:
+                                qty = 1.0
+                                if sch_count_col is not None:
+                                    count_item = schedule_table.item(r, sch_count_col)
+                                    count_text = count_item.text() if count_item else ""
+                                    count_val = parse_money(count_text)
+                                    if count_val is not None and count_val > 0:
+                                        qty = count_val
+
+                                ws_bucket = frame_wall_size_counts.setdefault(ft_key, {})
+                                ws_bucket[wall_size] = ws_bucket.get(wall_size, 0.0) + qty
+
+                return door_counts, frame_counts, frame_wall_size_counts
 
             def update_live_type_counts_on_tabs():
-                door_counts, frame_counts = build_schedule_type_counts_live()
+                door_counts, frame_counts, frame_wall_size_counts = build_schedule_type_counts_live()
                 any_changed = False
 
                 for widget, path, local_headers, _ in tables_data:
@@ -19229,8 +19251,22 @@ class MainWindow(QMainWindow):
 
                     table.blockSignals(True)
                     try:
+                        wall_sizes_idx = None
+                        local_type_idx = type_idx
+                        if is_frame:
+                            wall_sizes_idx = _find_header_idx(local_headers, ["Wall Sizes", "Wall Size Summary", "Wall Size Mix"])
+                            if wall_sizes_idx is None:
+                                wall_sizes_idx = count_idx + 1
+                                local_headers.insert(wall_sizes_idx, "Wall Sizes")
+                                table.insertColumn(wall_sizes_idx)
+                                table.setHorizontalHeaderItem(wall_sizes_idx, QTableWidgetItem("Wall Sizes"))
+                                table.setColumnWidth(wall_sizes_idx, 220)
+                                any_changed = True
+                                if local_type_idx is not None and local_type_idx >= wall_sizes_idx:
+                                    local_type_idx += 1
+
                         for r in range(table.rowCount()):
-                            type_item = table.item(r, type_idx)
+                            type_item = table.item(r, local_type_idx)
                             type_value = type_item.text() if type_item else ""
                             key = _type_key(type_value)
                             target_text = str(int(lookup.get(key, 0))) if key else ""
@@ -19247,6 +19283,31 @@ class MainWindow(QMainWindow):
                             count_item.setFlags(count_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                             count_item.setBackground(QColor(60, 60, 60))
                             count_item.setForeground(QColor(200, 200, 200))
+
+                            if is_frame and wall_sizes_idx is not None:
+                                wall_summary = ""
+                                if key:
+                                    ws_counts = frame_wall_size_counts.get(key, {})
+                                    if ws_counts:
+                                        parts = []
+                                        for wall_size, qty in ws_counts.items():
+                                            qty_int = int(qty)
+                                            qty_text = str(qty_int) if abs(qty - qty_int) < 1e-9 else f"{qty:g}"
+                                            parts.append(f"({qty_text}) {wall_size}")
+                                        wall_summary = ", ".join(parts)
+
+                                wall_item = table.item(r, wall_sizes_idx)
+                                if wall_item is None:
+                                    wall_item = QTableWidgetItem(wall_summary)
+                                    table.setItem(r, wall_sizes_idx, wall_item)
+                                    any_changed = True
+                                elif wall_item.text() != wall_summary:
+                                    wall_item.setText(wall_summary)
+                                    any_changed = True
+
+                                wall_item.setFlags(wall_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                                wall_item.setBackground(QColor(60, 60, 60))
+                                wall_item.setForeground(QColor(200, 200, 200))
                     finally:
                         table.blockSignals(False)
 
@@ -19353,7 +19414,100 @@ class MainWindow(QMainWindow):
                 # Run initial validation
                 validate_hardware_group_widths()
 
-            # Auto-populate Frame tables from Schedule columns that match (lookup, always update)
+            # Manual Schedule -> Door/Frame sync helpers (no automatic live sync).
+            frame_tables_info = []
+            schedule_match_cols = set()
+            sch_frame_type_cols = []
+            updating_frame_sync = [False]
+
+            def update_frame_tables_from_schedule(filtered_only=False, only_blanks=False, target_tab_stem=None):
+                if not isinstance(schedule_table, QTableWidget):
+                    return 0
+                if updating_frame_sync[0]:
+                    return 0
+                if not sch_frame_type_cols or not frame_tables_info:
+                    return 0
+
+                schedule_lookup = {}
+                for r in range(schedule_table.rowCount()):
+                    if filtered_only and schedule_table.isRowHidden(r):
+                        continue
+
+                    frame_type = ""
+                    for key_col in sch_frame_type_cols:
+                        ft_item = schedule_table.item(r, key_col)
+                        key_val = ft_item.text().strip().lower() if ft_item else ""
+                        if key_val:
+                            frame_type = key_val
+                            break
+                    if not frame_type:
+                        continue
+
+                    row_map = schedule_lookup.setdefault(frame_type, {})
+                    for sch_idx in schedule_match_cols:
+                        if sch_idx in row_map:
+                            continue
+                        cell_item = schedule_table.item(r, sch_idx)
+                        cell_text = cell_item.text().strip() if cell_item else ""
+                        if cell_text:
+                            row_map[sch_idx] = cell_text
+
+                if not schedule_lookup:
+                    return 0
+
+                updating_frame_sync[0] = True
+                updated_cells = 0
+
+                try:
+                    for tbl, frame_type_col, match_cols, frame_tab_stem in frame_tables_info:
+                        if target_tab_stem and frame_tab_stem != target_tab_stem:
+                            continue
+                        tbl.blockSignals(True)
+                        for r in range(tbl.rowCount()):
+                            if filtered_only and tbl.isRowHidden(r):
+                                continue
+
+                            ft_item = tbl.item(r, frame_type_col)
+                            frame_type = ft_item.text().strip().lower() if ft_item else ""
+                            if not frame_type:
+                                continue
+
+                            row_map = schedule_lookup.get(frame_type)
+                            for sch_idx, frame_idx, is_editable_pull in match_cols:
+                                value = row_map.get(sch_idx, "") if row_map else ""
+                                item = tbl.item(r, frame_idx)
+                                current_text = item.text().strip() if item else ""
+                                should_write = (not only_blanks) or (not current_text)
+
+                                if item is None:
+                                    item = QTableWidgetItem("")
+                                    tbl.setItem(r, frame_idx, item)
+
+                                if value:
+                                    if should_write and item.text() != value:
+                                        item.setText(value)
+                                        updated_cells += 1
+                                    if is_editable_pull:
+                                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                        item.setBackground(QColor(30, 30, 30))
+                                        item.setForeground(QColor(255, 255, 255))
+                                    else:
+                                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                                        item.setBackground(QColor(60, 60, 60))
+                                        item.setForeground(QColor(200, 200, 200))
+                                else:
+                                    if should_write and item.text():
+                                        item.setText("")
+                                        updated_cells += 1
+                                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                    item.setBackground(QColor(30, 30, 30))
+                                    item.setForeground(QColor(255, 255, 255))
+                        tbl.blockSignals(False)
+                finally:
+                    updating_frame_sync[0] = False
+
+                return updated_cells
+
             if schedule_headers is not None and isinstance(schedule_table, QTableWidget):
                 schedule_header_map = {h.strip().lower(): i + 1 for i, h in enumerate(schedule_headers) if h.strip()}  # +1 for checkbox column
                 schedule_alias_map = {
@@ -19367,13 +19521,11 @@ class MainWindow(QMainWindow):
                     "sidelite 2": ["2nd sidelite width"],
                     "description": ["elevation"],
                 }
-                sch_frame_type_cols = []
+
                 for key_name in ("frame type", "frame plan type"):
                     key_idx = schedule_header_map.get(key_name)
                     if key_idx is not None and key_idx not in sch_frame_type_cols:
                         sch_frame_type_cols.append(key_idx)
-                frame_tables_info = []
-                schedule_match_cols = set()
 
                 if sch_frame_type_cols:
                     for widget, path, headers, _ in tables_data:
@@ -19411,6 +19563,8 @@ class MainWindow(QMainWindow):
                                 if not target_name or target_name in seen_targets:
                                     continue
                                 seen_targets.add(target_name)
+                                if name_lower == "elevation" and target_name == "elevation":
+                                    continue
                                 if target_name in frame_header_map:
                                     is_editable_pull = ("finish" in target_name) or (target_name == "elevation")
                                     match_cols.append((sch_idx, frame_header_map[target_name], is_editable_pull))
@@ -19418,130 +19572,134 @@ class MainWindow(QMainWindow):
                                     break
 
                         if match_cols:
-                            frame_tables_info.append((actual_table, frame_type_col, match_cols))
+                            frame_tables_info.append((actual_table, frame_type_col, match_cols, path.stem.lower()))
 
-                updating_frame_sync = [False]
+            def sync_door_and_frame_tabs_from_schedule(filtered_only=False, only_blanks=False, show_result=False, target_tab_stem=None):
+                doors_synced_rows = 0
+                frame_synced_cells = update_frame_tables_from_schedule(
+                    filtered_only=filtered_only,
+                    only_blanks=only_blanks,
+                    target_tab_stem=target_tab_stem,
+                )
 
-                def update_frame_tables_from_schedule():
-                    assert schedule_table is not None
-                    if updating_frame_sync[0]:
-                        return
-                    if not sch_frame_type_cols or not frame_tables_info:
-                        return
+                door_sync_headers = {
+                    "active width",
+                    "inactive width",
+                    "height",
+                    "elevation",
+                    "fire rating",
+                    "stc",
+                    "mat'l",
+                }
 
-                    schedule_lookup = {}
-                    for r in range(schedule_table.rowCount()):
-                        frame_type = ""
-                        for key_col in sch_frame_type_cols:
-                            ft_item = schedule_table.item(r, key_col)
-                            key_val = ft_item.text().strip().lower() if ft_item else ""
-                            if key_val:
-                                frame_type = key_val
-                                break
-                        if not frame_type:
+                for widget, csv_path, headers, _ in tables_data:
+                    actual_table = self._extract_table_widget(widget)
+                    if actual_table is None or not hasattr(csv_path, "stem"):
+                        continue
+
+                    stem_lower = csv_path.stem.lower()
+                    if target_tab_stem and stem_lower != target_tab_stem:
+                        continue
+                    if "door" not in stem_lower or "schedule" in stem_lower:
+                        continue
+
+                    door_type_col = None
+                    sync_col_indices = []
+                    for idx, h in enumerate(headers):
+                        h_lower = h.strip().lower()
+                        if h_lower == "door type":
+                            door_type_col = idx
+                        if h_lower in door_sync_headers:
+                            sync_col_indices.append(idx)
+
+                    if door_type_col is None:
+                        continue
+
+                    for r in range(actual_table.rowCount()):
+                        if filtered_only and actual_table.isRowHidden(r):
                             continue
 
-                        row_map = schedule_lookup.setdefault(frame_type, {})
-                        for sch_idx in schedule_match_cols:
-                            if sch_idx in row_map:
+                        if only_blanks and sync_col_indices:
+                            has_existing_value = False
+                            for c in sync_col_indices:
+                                item = actual_table.item(r, c)
+                                if item and item.text().strip():
+                                    has_existing_value = True
+                                    break
+                            if has_existing_value:
                                 continue
-                            cell_item = schedule_table.item(r, sch_idx)
-                            cell_text = cell_item.text().strip() if cell_item else ""
-                            if cell_text:
-                                row_map[sch_idx] = cell_text
 
-                    if not schedule_lookup:
-                        return
+                        door_type_item = actual_table.item(r, door_type_col)
+                        if not door_type_item or not door_type_item.text().strip():
+                            continue
 
-                    updating_frame_sync[0] = True
-                    updated_cells = 0
+                        self._recalculate_wood_door_formulas_for_row(actual_table, r, headers, active_path, tables_data)
+                        doors_synced_rows += 1
 
-                    for tbl, frame_type_col, match_cols in frame_tables_info:
-                        tbl.blockSignals(True)
-                        for r in range(tbl.rowCount()):
-                            ft_item = tbl.item(r, frame_type_col)
-                            frame_type = ft_item.text().strip().lower() if ft_item else ""
-                            if not frame_type:
-                                continue
-                            row_map = schedule_lookup.get(frame_type)
-                            for sch_idx, frame_idx, is_editable_pull in match_cols:
-                                value = row_map.get(sch_idx, "") if row_map else ""
-                                item = tbl.item(r, frame_idx)
-                                if value:
-                                    if item is None:
-                                        item = QTableWidgetItem(value)
-                                        tbl.setItem(r, frame_idx, item)
-                                    else:
-                                        item.setText(value)
-                                    if is_editable_pull:
-                                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                                        item.setBackground(QColor(30, 30, 30))
-                                        item.setForeground(QColor(255, 255, 255))
-                                    else:
-                                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                                        item.setBackground(QColor(60, 60, 60))
-                                        item.setForeground(QColor(200, 200, 200))
-                                    updated_cells += 1
-                                else:
-                                    if item is None:
-                                        item = QTableWidgetItem("")
-                                        tbl.setItem(r, frame_idx, item)
-                                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                                    item.setBackground(QColor(30, 30, 30))
-                                    item.setForeground(QColor(255, 255, 255))
-                        tbl.blockSignals(False)
+                if (doors_synced_rows > 0 or frame_synced_cells > 0) and mark_schedule_changed:
+                    mark_schedule_changed()
 
-                    updating_frame_sync[0] = False
+                if show_result:
+                    QMessageBox.information(
+                        self,
+                        "Sync with Schedule",
+                        f"Synced {doors_synced_rows} door row(s) and {frame_synced_cells} frame cell(s)."
+                    )
 
-                    if updated_cells > 0 and mark_schedule_changed:
-                        mark_schedule_changed()
+                return doors_synced_rows, frame_synced_cells
 
-                if sch_frame_type_cols and frame_tables_info and schedule_match_cols:
-                    def trigger_frame_table_sync(_table):
-                        if _table is None:
-                            return
-                        if _table.property("_frame_sync_pending"):
-                            return
-                        _table.setProperty("_frame_sync_pending", True)
+            def prompt_and_run_schedule_sync():
+                if not isinstance(schedule_table, QTableWidget):
+                    QMessageBox.information(self, "Sync with Schedule", "Schedule table is not available.")
+                    return
 
-                        def _run_sync(table=_table):
-                            table.setProperty("_frame_sync_pending", False)
-                            update_frame_tables_from_schedule()
+                current_entry = _find_current_table_entry()
+                if not current_entry or not hasattr(current_entry[1], "stem"):
+                    QMessageBox.information(self, "Sync with Schedule", "No active tab was found.")
+                    return
 
-                        QTimer.singleShot(0, _run_sync)
+                target_tab_stem = current_entry[1].stem.lower()
+                if ("door" not in target_tab_stem) and ("frame" not in target_tab_stem):
+                    QMessageBox.information(self, "Sync with Schedule", "Sync with Schedule only applies to door or frame tabs.")
+                    return
 
-                    def on_schedule_frame_changed(item):
-                        if item is None:
-                            return
-                        if item.column() in sch_frame_type_cols or item.column() in schedule_match_cols:
-                            update_frame_tables_from_schedule()
+                mode_dlg = QDialog(self)
+                mode_dlg.setWindowTitle("Sync with Schedule")
+                mode_layout = QVBoxLayout(mode_dlg)
+                mode_layout.addWidget(QLabel("Choose sync mode:"))
 
-                    schedule_table.itemChanged.connect(on_schedule_frame_changed)
+                mode_group = QButtonGroup(mode_dlg)
+                rb_only_blanks = QRadioButton("Only blanks")
+                rb_filtered = QRadioButton("Filtered rows")
+                rb_all = QRadioButton("All rows")
+                rb_all.setChecked(True)
+                mode_group.addButton(rb_only_blanks)
+                mode_group.addButton(rb_filtered)
+                mode_group.addButton(rb_all)
+                mode_layout.addWidget(rb_only_blanks)
+                mode_layout.addWidget(rb_filtered)
+                mode_layout.addWidget(rb_all)
 
-                    # Keep frame tab detail columns in sync when Frame Type is edited directly.
-                    for frame_table, frame_type_col, _ in frame_tables_info:
-                        def on_frame_table_type_changed(item, table=frame_table, type_col=frame_type_col):
-                            if item is None:
-                                return
-                            if item.tableWidget() is table and item.column() == type_col:
-                                trigger_frame_table_sync(table)
+                btn_box = QHBoxLayout()
+                btn_sync = QPushButton("Sync")
+                btn_cancel = QPushButton("Cancel")
+                btn_sync.clicked.connect(mode_dlg.accept)
+                btn_cancel.clicked.connect(mode_dlg.reject)
+                btn_box.addWidget(btn_sync)
+                btn_box.addWidget(btn_cancel)
+                mode_layout.addLayout(btn_box)
 
-                        frame_table.itemChanged.connect(on_frame_table_type_changed)
+                if mode_dlg.exec() != QDialog.DialogCode.Accepted:
+                    return
 
-                        # Bulk edits (paste/fill/delete) bypass per-cell type handlers, so
-                        # use the table paste filter's post-edit hook to refresh once.
-                        pf = getattr(frame_table, "_table_paste_filter", None)
-                        if pf is not None:
-                            existing_post_edit_cb = getattr(pf, "post_edit_callback", None)
-
-                            def _combined_post_edit_callback(table=frame_table, existing_cb=existing_post_edit_cb):
-                                if callable(existing_cb):
-                                    existing_cb()
-                                trigger_frame_table_sync(table)
-
-                            pf.post_edit_callback = _combined_post_edit_callback
-
-                    update_frame_tables_from_schedule()
+                only_blanks = rb_only_blanks.isChecked()
+                filtered_only = rb_filtered.isChecked()
+                sync_door_and_frame_tabs_from_schedule(
+                    filtered_only=filtered_only,
+                    only_blanks=only_blanks,
+                    show_result=True,
+                    target_tab_stem=target_tab_stem,
+                )
         
         # Group tables by type: doors, frames, and others
         door_tables = []
@@ -20884,6 +21042,7 @@ class MainWindow(QMainWindow):
                 focused_table = None
                 focused_row = -1
                 focused_col = -1
+                focused_non_table_widget = None
 
                 if focus_widget is not None:
                     if isinstance(focus_widget, QTableWidget):
@@ -20900,10 +21059,12 @@ class MainWindow(QMainWindow):
                     focused_row = focused_table.currentRow()
                     focused_col = focused_table.currentColumn()
                 elif focus_widget is not None:
-                    # Commit non-table editors before saving, but keep table focus intact
-                    # so keyboard navigation/editing can continue after autosave.
-                    focus_widget.clearFocus()
-                    QApplication.processEvents()
+                    focused_non_table_widget = focus_widget
+                    # Avoid clearing focus during normal autosave; doing so can shift
+                    # focus to the main window when users click workbook dialog buttons.
+                    if force:
+                        focus_widget.clearFocus()
+                        QApplication.processEvents()
 
                 status_label.setText("Saving...")
                 status_label.setStyleSheet("color: #2196F3; padding: 5px;")
@@ -21057,6 +21218,12 @@ class MainWindow(QMainWindow):
                             target_col = focused_col if 0 <= focused_col < focused_table.columnCount() else min(max(0, focused_table.currentColumn()), focused_table.columnCount() - 1)
                             focused_table.setCurrentCell(target_row, target_col)
                             focused_table.setFocus(Qt.FocusReason.OtherFocusReason)
+                    except RuntimeError:
+                        pass
+                elif isinstance(focused_non_table_widget, QWidget):
+                    try:
+                        if focused_non_table_widget.isVisible() and focused_non_table_widget.window() is dlg:
+                            focused_non_table_widget.setFocus(Qt.FocusReason.OtherFocusReason)
                     except RuntimeError:
                         pass
             except Exception as e:
@@ -21605,13 +21772,39 @@ class MainWindow(QMainWindow):
         if not read_only:
             # Extract Door Types button
             btn_extract_doors = QPushButton("Extract Door Types")
-            btn_extract_doors.clicked.connect(lambda: self.extract_door_types(tab_widget, tables_data, mark_schedule_changed, workbook_path))
+            btn_extract_doors.clicked.connect(
+                lambda: self.extract_door_types(
+                    tab_widget,
+                    tables_data,
+                    mark_schedule_changed,
+                    workbook_path,
+                    post_sync_callback=lambda stems=None: [
+                        sync_door_and_frame_tabs_from_schedule(show_result=False, target_tab_stem=s)
+                        for s in (stems or [])
+                    ],
+                )
+            )
             btn_row.addWidget(btn_extract_doors)
 
             # Extract Frame Types button
             btn_extract_frames = QPushButton("Extract Frame Types")
-            btn_extract_frames.clicked.connect(lambda: self.extract_frame_types(tab_widget, tables_data, mark_schedule_changed, workbook_path))
+            btn_extract_frames.clicked.connect(
+                lambda: self.extract_frame_types(
+                    tab_widget,
+                    tables_data,
+                    mark_schedule_changed,
+                    workbook_path,
+                    post_sync_callback=lambda stems=None: [
+                        sync_door_and_frame_tabs_from_schedule(show_result=False, target_tab_stem=s)
+                        for s in (stems or [])
+                    ],
+                )
+            )
             btn_row.addWidget(btn_extract_frames)
+
+            btn_sync_schedule = QPushButton("Sync with Schedule")
+            btn_sync_schedule.clicked.connect(prompt_and_run_schedule_sync)
+            btn_row.addWidget(btn_sync_schedule)
             
             # Import from PDF button (only show if libraries available)
             if HAS_PDFPLUMBER or HAS_OCR:
@@ -25028,14 +25221,15 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Door Elevations", f"Failed to generate PDF:\n{e}")
 
-    def extract_door_types(self, tab_widget, tables_data, mark_changed_callback, workbook_path):
+    def extract_door_types(self, tab_widget, tables_data, mark_changed_callback, workbook_path, post_sync_callback=None):
         """Extract unique door types from source table and populate appropriate door type tables."""
+        popup_owner = _resolve_transient_parent(tab_widget if isinstance(tab_widget, QWidget) else self)
         if not workbook_path or not workbook_path.exists():
-            QMessageBox.warning(self, "Extract Door Types", "Workbook path not found.")
+            QMessageBox.warning(popup_owner, "Extract Door Types", "Workbook path not found.")
             return
         
         # Ask user: Extract from filtered list or all?
-        scope_dlg = QDialog(self)
+        scope_dlg = QDialog(popup_owner)
         scope_dlg.setWindowTitle("Extract Door Types - Scope")
         scope_layout = QVBoxLayout(scope_dlg)
         scope_layout.addWidget(QLabel("Extract door types from:"))
@@ -25064,7 +25258,7 @@ class MainWindow(QMainWindow):
         use_filtered = scope_filtered_radio.isChecked()
         
         # Ask user: Add only missing or clear and create new?
-        mode_dlg = QDialog(self)
+        mode_dlg = QDialog(popup_owner)
         mode_dlg.setWindowTitle("Extract Door Types - Mode")
         mode_layout = QVBoxLayout(mode_dlg)
         mode_layout.addWidget(QLabel("How should door types be added?"))
@@ -25120,7 +25314,7 @@ class MainWindow(QMainWindow):
         
         if source_table is None:
             QMessageBox.information(
-                self, 
+                popup_owner, 
                 "Extract Door Types", 
                 "No table found with both 'Door Type' and 'Material Type' columns.\n\n"
                 "Please ensure your source table has these columns."
@@ -25129,7 +25323,7 @@ class MainWindow(QMainWindow):
 
         if source_headers is None or door_type_col_idx is None or material_type_col_idx is None:
             QMessageBox.information(
-                self,
+                popup_owner,
                 "Extract Door Types",
                 "Source table metadata is incomplete. Please verify headers and try again."
             )
@@ -25173,7 +25367,7 @@ class MainWindow(QMainWindow):
         
         if not unique_doors:
             QMessageBox.information(
-                self, 
+                popup_owner, 
                 "Extract Door Types", 
                 f"No door types found in the source table.\n\n"
                 f"Rows scanned: {total_rows_scanned}\n"
@@ -25195,7 +25389,7 @@ class MainWindow(QMainWindow):
         debug_info += f"\nProceed with extraction?"
         
         result = QMessageBox.question(
-            self,
+            popup_owner,
             "Confirm Extraction",
             debug_info,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -25280,6 +25474,7 @@ class MainWindow(QMainWindow):
         # Process each material type
         added_count = 0
         errors = []
+        modified_target_stems = set()
         
         for material_type, door_types in unique_doors.items():
             # Determine target CSV filename
@@ -25433,6 +25628,7 @@ class MainWindow(QMainWindow):
                         writer = csv.writer(f)
                         writer.writerow(headers)
                         writer.writerows(filtered_rows)
+                    modified_target_stems.add(target_path.stem.lower())
                 except Exception as e:
                     errors.append(f"Error writing {target_filename}: {e}")
         
@@ -25511,24 +25707,31 @@ class MainWindow(QMainWindow):
         
         if errors:
             QMessageBox.warning(
-                self,
+                popup_owner,
                 "Extract Door Types",
                 f"{mode_text.capitalize()} {added_count} door type(s) {scope_text} with errors:\n\n" + "\n".join(errors)
             )
         else:
             QMessageBox.information(
-                self,
+                popup_owner,
                 "Extract Door Types",
                 f"Successfully {mode_text} {added_count} door type(s) {scope_text}."
             )
 
-    def extract_frame_types(self, tab_widget, tables_data, mark_changed_callback, workbook_path):
+        if callable(post_sync_callback):
+            try:
+                post_sync_callback(sorted(modified_target_stems))
+            except TypeError:
+                post_sync_callback()
+
+    def extract_frame_types(self, tab_widget, tables_data, mark_changed_callback, workbook_path, post_sync_callback=None):
         """Extract unique frame types from source table and populate appropriate frame type tables."""
+        popup_owner = _resolve_transient_parent(tab_widget if isinstance(tab_widget, QWidget) else self)
         if not workbook_path or not workbook_path.exists():
-            QMessageBox.warning(self, "Extract Frame Types", "Workbook path not found.")
+            QMessageBox.warning(popup_owner, "Extract Frame Types", "Workbook path not found.")
             return
 
-        scope_dlg = QDialog(self)
+        scope_dlg = QDialog(popup_owner)
         scope_dlg.setWindowTitle("Extract Frame Types - Scope")
         scope_layout = QVBoxLayout(scope_dlg)
         scope_layout.addWidget(QLabel("Extract frame types from:"))
@@ -25556,7 +25759,7 @@ class MainWindow(QMainWindow):
 
         use_filtered = scope_filtered_radio.isChecked()
 
-        mode_dlg = QDialog(self)
+        mode_dlg = QDialog(popup_owner)
         mode_dlg.setWindowTitle("Extract Frame Types - Mode")
         mode_layout = QVBoxLayout(mode_dlg)
         mode_layout.addWidget(QLabel("How should frame types be added?"))
@@ -25609,7 +25812,7 @@ class MainWindow(QMainWindow):
 
         if source_table is None:
             QMessageBox.information(
-                self,
+                popup_owner,
                 "Extract Frame Types",
                 "No table found with both 'Frame Type' and 'Frame Material' columns.\n\n"
                 "Please ensure your source table has these columns."
@@ -25618,7 +25821,7 @@ class MainWindow(QMainWindow):
 
         if source_headers is None or frame_type_col_idx is None or frame_material_col_idx is None:
             QMessageBox.information(
-                self,
+                popup_owner,
                 "Extract Frame Types",
                 "Source table metadata is incomplete. Please verify headers and try again."
             )
@@ -25660,7 +25863,7 @@ class MainWindow(QMainWindow):
 
         if not unique_frames:
             QMessageBox.information(
-                self,
+                popup_owner,
                 "Extract Frame Types",
                 f"No frame types found in the source table.\n\n"
                 f"Rows scanned: {total_rows_scanned}\n"
@@ -25681,7 +25884,7 @@ class MainWindow(QMainWindow):
         debug_info += "\nProceed with extraction?"
 
         result = QMessageBox.question(
-            self,
+            popup_owner,
             "Confirm Extraction",
             debug_info,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -25715,6 +25918,7 @@ class MainWindow(QMainWindow):
 
         added_count = 0
         errors = []
+        modified_target_stems = set()
 
         for material_type, frame_types in unique_frames.items():
             target_filename = resolved_target_map.get(material_type, default_target)
@@ -25821,6 +26025,7 @@ class MainWindow(QMainWindow):
                         writer = csv.writer(f)
                         writer.writerow(headers)
                         writer.writerows(filtered_rows)
+                    modified_target_stems.add(target_path.stem.lower())
                 except Exception as e:
                     errors.append(f"Error writing {target_filename}: {e}")
 
@@ -25866,16 +26071,22 @@ class MainWindow(QMainWindow):
 
         if errors:
             QMessageBox.warning(
-                self,
+                popup_owner,
                 "Extract Frame Types",
                 f"{mode_text.capitalize()} {added_count} frame type(s) {scope_text} with errors:\n\n" + "\n".join(errors)
             )
         else:
             QMessageBox.information(
-                self,
+                popup_owner,
                 "Extract Frame Types",
                 f"Successfully {mode_text} {added_count} frame type(s) {scope_text}."
             )
+
+        if callable(post_sync_callback):
+            try:
+                post_sync_callback(sorted(modified_target_stems))
+            except TypeError:
+                post_sync_callback()
 
     def _get_schedule_data_from_tables(self, tables_data):
         """
@@ -28437,8 +28648,9 @@ class MainWindow(QMainWindow):
 
     def _generate_door_types(self, table: QTableWidget, door_type_col: int, headers: List[str], change_callback):
         """Generate door type strings from related columns (VBA ConcatenateDoors replication)."""
+        popup_owner = _resolve_transient_parent(table if isinstance(table, QWidget) else self)
         # Show dialog to choose scope
-        scope_dlg = QDialog(self)
+        scope_dlg = QDialog(popup_owner)
         scope_dlg.setWindowTitle("Generate Door Types")
         scope_dlg.resize(400, 200)
         
@@ -28498,7 +28710,7 @@ class MainWindow(QMainWindow):
                     rows_to_process.append(r)
         
         if not rows_to_process:
-            QMessageBox.information(self, "Generate Door Types", "No rows match the selected criteria.")
+            QMessageBox.information(popup_owner, "Generate Door Types", "No rows match the selected criteria.")
             return
         
         # Process each row
@@ -28589,15 +28801,16 @@ class MainWindow(QMainWindow):
             change_callback()
         
         QMessageBox.information(
-            self,
+            popup_owner,
             "Generate Door Types",
             f"Successfully generated door types for {processed_count} row(s)."
         )
 
     def _generate_frame_types(self, table: QTableWidget, frame_type_col: int, headers: List[str], change_callback):
         """Generate frame type strings from related columns (VBA ConcatenateFrames replication)."""
+        popup_owner = _resolve_transient_parent(table if isinstance(table, QWidget) else self)
         # Show dialog to choose scope
-        scope_dlg = QDialog(self)
+        scope_dlg = QDialog(popup_owner)
         scope_dlg.setWindowTitle("Generate Frame Types")
         scope_dlg.resize(400, 200)
         
@@ -28657,7 +28870,7 @@ class MainWindow(QMainWindow):
                     rows_to_process.append(r)
         
         if not rows_to_process:
-            QMessageBox.information(self, "Generate Frame Types", "No rows match the selected criteria.")
+            QMessageBox.information(popup_owner, "Generate Frame Types", "No rows match the selected criteria.")
             return
         
         # Process each row
@@ -28758,7 +28971,7 @@ class MainWindow(QMainWindow):
             change_callback()
         
         QMessageBox.information(
-            self,
+            popup_owner,
             "Generate Frame Types",
             f"Successfully generated frame types for {processed_count} row(s)."
         )
