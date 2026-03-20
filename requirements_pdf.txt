@@ -1,0 +1,25 @@
+# Optional dependencies for PDF import functionality
+# Install with: pip install -r requirements_pdf.txt
+
+# For text extraction from PDFs (fast, works with text-based PDFs)
+pdfplumber>=0.10.0
+
+# For OCR support (works with scanned PDFs/images)
+pdf2image>=1.16.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# For proposal PDF generation
+reportlab>=4.0.0
+pypdf>=4.0.0
+# Alternative package name also supported by code:
+# PyPDF2>=3.0.0
+
+# For spreadsheet import (CSV/Excel)
+openpyxl>=3.1.0
+xlrd>=2.0.1
+
+# Note: pytesseract also requires Tesseract OCR to be installed separately:
+# Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+# After installing, you may need to add Tesseract to your PATH or configure:
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'

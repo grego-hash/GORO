@@ -1,0 +1,18 @@
+# Python bytecode and cache folders
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+
+# Local build outputs
+build/
+dist/
+
+# Local logs and debug output
+*.log
+*_debug.log
+
+# IDE settings
+.vscode/

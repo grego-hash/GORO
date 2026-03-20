@@ -1,0 +1,4 @@
+Customer Name,Contact Name,Position,Email,Phone,Default
+ABC Construction,John Smith,Project Manager,john@abc.com,555-0101,True
+ABC Construction,Mary Johnson,Site Manager,mary@abc.com,555-0102,False
+XYZ Contractors,Robert Brown,Director,robert@xyz.com,555-0201,True
