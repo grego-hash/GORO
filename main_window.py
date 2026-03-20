@@ -24095,6 +24095,7 @@ class MainWindow(QMainWindow):
         construction_idx = self._find_header_idx_aliases(frame_headers, ["Construction", "Metal Style", "Mat'l", "Material"])
         trim_idx = self._find_header_idx_aliases(frame_headers, ["Return", "Frame Return"])
         finish_idx = self._find_header_idx_aliases(frame_headers, ["Finish", "Frame Finish", "2nd Finish"])
+        count_idx = self._find_header_idx_aliases(frame_headers, ["Count", "Qty", "Quantity"])
         sidelite_right_idx = self._find_header_idx_aliases(
             frame_headers,
             ["Sidelite Width", "Sidelite width", "Sidelite", "Sidelite Right", "Sidelite RH"],
@@ -24174,6 +24175,7 @@ class MainWindow(QMainWindow):
             construction_text = _cell_text(r, construction_idx)
             trim_text = _cell_text(r, trim_idx)
             finish_text = _cell_text(r, finish_idx)
+            count_text = _cell_text(r, count_idx)
             sidelite_right_text = _cell_text(r, sidelite_right_idx)
             sidelite_left_text = _cell_text(r, sidelite_left_idx)
             sidelite_right_height_text = _cell_text(r, sidelite_right_height_idx)
@@ -24246,6 +24248,7 @@ class MainWindow(QMainWindow):
                         "construction": construction_text,
                         "trim": trim_text,
                         "finish": finish_text,
+                        "count": count_text,
                     "face_in": face_in,
                     "face_assumed": face_assumed,
                     "sidelite_right_in": sidelite_right_in,
@@ -24376,8 +24379,12 @@ class MainWindow(QMainWindow):
 
             def _draw_h_dim(x1: float, x2: float, y_geom: float, y_dim: float, label: str) -> None:
                 pdf.setLineWidth(0.9)
-                pdf.line(x1, y_geom, x1, y_dim)
-                pdf.line(x2, y_geom, x2, y_dim)
+                # Keep extension lines slightly off the geometry for cleaner readability.
+                ext_gap = 2.5
+                ext_dir = 1.0 if y_dim >= y_geom else -1.0
+                y_start = y_geom + (ext_dir * ext_gap)
+                pdf.line(x1, y_start, x1, y_dim)
+                pdf.line(x2, y_start, x2, y_dim)
                 pdf.line(x1, y_dim, x2, y_dim)
                 _draw_arrowhead(x1, y_dim, 1.0, 0.0, 6.0)
                 _draw_arrowhead(x2, y_dim, -1.0, 0.0, 6.0)
@@ -24391,7 +24398,7 @@ class MainWindow(QMainWindow):
                 pdf.setFillColorRGB(0, 0, 0)
                 pdf.drawCentredString((x1 + x2) / 2.0, label_y, label)
 
-            def _draw_v_dim(x_dim: float, y1: float, y2: float, label: str) -> None:
+            def _draw_v_dim(x_dim: float, y1: float, y2: float, label: str, label_side: str = "left") -> None:
                 bottom = min(y1, y2)
                 top = max(y1, y2)
                 pdf.setLineWidth(0.9)
@@ -24402,7 +24409,8 @@ class MainWindow(QMainWindow):
                 pdf.setFont("Helvetica-Bold", 9)
                 text_w = pdf.stringWidth(label, "Helvetica-Bold", 9)
                 pdf.setFillColorRGB(1, 1, 1)
-                pdf.translate(x_dim - 9.0, (bottom + top) / 2.0)
+                x_offset = 9.0 if str(label_side or "left").strip().lower() == "right" else -9.0
+                pdf.translate(x_dim + x_offset, (bottom + top) / 2.0)
                 pdf.rotate(90)
                 pdf.rect(-(text_w / 2.0) - 4.0, -5.0, text_w + 8.0, 11.0, stroke=0, fill=1)
                 pdf.setFillColorRGB(0, 0, 0)
@@ -24417,6 +24425,34 @@ class MainWindow(QMainWindow):
                 while fitted and pdf.stringWidth(fitted + suffix, font_name, font_size) > max_width:
                     fitted = fitted[:-1]
                 return (fitted + suffix) if fitted else suffix
+
+            def _draw_glass_hash_marks(x1: float, y1: float, x2: float, y2: float) -> None:
+                """Draw small diagonal glazing marks in a rectangular lite area."""
+                left = min(x1, x2)
+                right = max(x1, x2)
+                bottom = min(y1, y2)
+                top = max(y1, y2)
+                if right - left < 12.0 or top - bottom < 12.0:
+                    return
+
+                inset = 2.0
+                mark_len = 5.0
+                gap = 2.8
+                pdf.setLineWidth(0.7)
+
+                # Top-left cluster
+                sx = left + inset
+                sy = top - inset
+                for i in range(3):
+                    dx = i * gap
+                    pdf.line(sx + dx, sy - mark_len, sx + dx + mark_len, sy)
+
+                # Bottom-right cluster
+                ex = right - inset - mark_len - (2 * gap)
+                ey = bottom + inset + mark_len
+                for i in range(3):
+                    dx = i * gap
+                    pdf.line(ex + dx, ey - mark_len, ex + dx + mark_len, ey)
 
             def _draw_title_block(page_number: int) -> None:
                 block_y = sheet_margin
@@ -24510,6 +24546,8 @@ class MainWindow(QMainWindow):
                     info_lines.append(("TRIM", str(data.get("trim"))))
                 if data.get("finish"):
                     info_lines.append(("FINISH", str(data.get("finish"))))
+                if data.get("count"):
+                    info_lines.append(("COUNT", str(data.get("count"))))
                 if transom_type != "none":
                     transom_labels = {
                         "door_only": "Door Only",
@@ -24554,15 +24592,17 @@ class MainWindow(QMainWindow):
                 if transom_type == "sidelite_only" and not has_any_sidelite:
                     has_transom = False
                 transom_bottom_y = inner_top_y - transom_h_pts if has_transom else inner_top_y
+                transom_member_top_y = min(inner_top_y, transom_bottom_y + face_w) if has_transom else inner_top_y
 
-                pdf.setLineWidth(1.4)
+                pdf.setLineWidth(1.6)
                 pdf.line(draw_x, draw_y, draw_x, top_y)
                 pdf.line(right_x, draw_y, right_x, top_y)
                 pdf.line(draw_x, top_y, right_x, top_y)
 
-                pdf.setLineWidth(0.9)
+                pdf.setLineWidth(1.1)
                 x_cursor = inner_left_x
                 span_layouts = []
+                glass_regions = []
                 for span_kind, span_width_in in opening_spans:
                     span_w = max(0.0, float(span_width_in)) * pts_per_in
                     left_open_x = x_cursor
@@ -24591,10 +24631,16 @@ class MainWindow(QMainWindow):
                         pdf.line(right_open_x, sill_y, right_open_x, span_top_y)
                         pdf.line(left_open_x, sill_y, right_open_x, sill_y)
                         pdf.line(left_open_x - face_w, draw_y, right_open_x + face_w, draw_y)
+                        glass_regions.append((left_open_x + 1.2, sill_y + 1.2, right_open_x - 1.2, span_top_y - 1.2))
 
-                    if span_has_transom and jamb_continuous:
-                        pdf.line(left_open_x, transom_bottom_y, left_open_x, inner_top_y)
-                        pdf.line(right_open_x, transom_bottom_y, right_open_x, inner_top_y)
+                    if span_has_transom:
+                        # Always show transom jambs above the transom bar.
+                        pdf.line(left_open_x, transom_member_top_y, left_open_x, inner_top_y)
+                        pdf.line(right_open_x, transom_member_top_y, right_open_x, inner_top_y)
+                        # Only bridge through the transom bar when jambs are continuous.
+                        if jamb_continuous:
+                            pdf.line(left_open_x, transom_bottom_y, left_open_x, transom_member_top_y)
+                            pdf.line(right_open_x, transom_bottom_y, right_open_x, transom_member_top_y)
 
                     x_cursor = right_open_x + face_w
                 pdf.line(inner_left_x, inner_top_y, inner_right_x, inner_top_y)
@@ -24602,25 +24648,44 @@ class MainWindow(QMainWindow):
                 if has_transom:
                     if header_continuous:
                         pdf.line(inner_left_x, transom_bottom_y, inner_right_x, transom_bottom_y)
+                        pdf.line(inner_left_x, transom_member_top_y, inner_right_x, transom_member_top_y)
                     else:
                         for span in span_layouts:
                             if span["has_transom"]:
-                                pdf.line(float(span["left_open_x"]), transom_bottom_y, float(span["right_open_x"]), transom_bottom_y)
+                                left_x = float(span["left_open_x"])
+                                right_x = float(span["right_open_x"])
+                                pdf.line(left_x, transom_bottom_y, right_x, transom_bottom_y)
+                                pdf.line(left_x, transom_member_top_y, right_x, transom_member_top_y)
+
+                    for span in span_layouts:
+                        if span["has_transom"]:
+                            glass_regions.append(
+                                (
+                                    float(span["left_open_x"]) + 1.2,
+                                    transom_member_top_y + 1.2,
+                                    float(span["right_open_x"]) - 1.2,
+                                    inner_top_y - 1.2,
+                                )
+                            )
 
                     _draw_v_dim(
                         right_x + 12.0,
                         transom_bottom_y,
                         inner_top_y,
                         _fit_text(self._format_inches_arch(transom_height_in), "Helvetica-Bold", 9, 52.0),
+                        label_side="right",
                     )
+
+                for gx1, gy1, gx2, gy2 in glass_regions:
+                    _draw_glass_hash_marks(gx1, gy1, gx2, gy2)
 
                 for span in span_layouts:
                     if span["kind"] == "main":
                         _draw_h_dim(
                             float(span["left_open_x"]),
                             float(span["right_open_x"]),
-                            inner_top_y,
-                            inner_top_y - 18.0,
+                            draw_y,
+                            draw_y - 18.0,
                             _fit_text(self._format_inches_arch(float(span["width_in"])), "Helvetica-Bold", 9, 56.0),
                         )
                         _draw_v_dim(
@@ -24651,16 +24716,32 @@ class MainWindow(QMainWindow):
                                 9,
                                 48.0,
                             ),
+                            label_side="right" if span["kind"] == "right_sidelite" else "left",
                         )
 
-                text_y = cell_y + 62.0
-                label_w = 58.0
-                for label, value in info_lines:
-                    pdf.setFont("Helvetica-Bold", 7)
-                    pdf.drawString(cell_x + 4.0, text_y, label)
-                    pdf.setFont("Helvetica", 7)
-                    pdf.drawString(cell_x + label_w, text_y, _fit_text(value, "Helvetica", 7, cell_w - label_w - 8.0))
-                    text_y -= 11.0
+                lines_per_col = 6
+                col_count = 2 if len(info_lines) > lines_per_col else 1
+                col_inner_gap = 10.0
+                col_w = (cell_w - 8.0 - (col_inner_gap if col_count == 2 else 0.0)) / col_count
+                line_step = 12.0
+                text_y_start = cell_y + 64.0
+
+                for idx, (label, value) in enumerate(info_lines):
+                    col_idx = min(col_count - 1, idx // lines_per_col)
+                    row_idx = idx % lines_per_col
+                    col_x = cell_x + 4.0 + (col_idx * (col_w + col_inner_gap))
+                    text_y = text_y_start - (row_idx * line_step)
+
+                    label_text = f"{label}:"
+                    pdf.setFont("Helvetica-Bold", 8)
+                    pdf.drawString(col_x, text_y, label_text)
+                    dyn_label_w = pdf.stringWidth(label_text, "Helvetica-Bold", 8) + 6.0
+                    pdf.setFont("Helvetica", 8)
+                    pdf.drawString(
+                        col_x + dyn_label_w,
+                        text_y,
+                        _fit_text(value, "Helvetica", 8, max(12.0, col_w - dyn_label_w - 2.0)),
+                    )
 
             pdf.save()
         except Exception as e:
