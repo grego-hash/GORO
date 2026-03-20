@@ -1,16 +1,16 @@
-DESCRIPTION,Handing,Rating_Fire,STC,Elevation
-Single,RH,NR,NA,F
-Single SL,LH,20M,35,NL
-Single Dbl SL,RHI,45M,40,HL
-EQ Pair,LHI,60M,45,FG
-UNEQ Pair,RHR,90M,50,LV
-Pair SL,LHR,180M,55,DT
-Pair Dbl SL,RHA,250TR,30,
-VersaGlide,LHA,450TR,35,
-ExamGlide,RHRA,650TR,40,
-Bipass,LHRA,>650TR,45,
-Slider,DE-RHR,,NA,
-Window,DE-LHR,,NA,
-Cased Opening,DA,,NA,
-Existing,CO,,NA,
-,N/A,,NA,
+DESCRIPTION,Handing,Rating_Fire,STC,Elevation,Transom Type,Header Continuous,Jamb Continuous
+Single,RH,NR,NA,F,None,No,No
+Single SL,LH,20M,35,NL,Door Only,Yes,Yes
+Single Dbl SL,RHI,45M,40,HL,Sidelite Only,,
+EQ Pair,LHI,60M,45,FG,Full Width,,
+UNEQ Pair,RHR,90M,50,LV,,,
+Pair SL,LHR,180M,55,DT,,,
+Pair Dbl SL,RHA,250TR,30,,,,
+VersaGlide,LHA,450TR,35,,,,
+ExamGlide,RHRA,650TR,40,,,,
+Bipass,LHRA,>650TR,45,,,,
+Slider,DE-RHR,,NA,,,,
+Window,DE-LHR,,NA,,,,
+Cased Opening,DA,,NA,,,,
+Existing,CO,,NA,,,,
+,N/A,,NA,,,,

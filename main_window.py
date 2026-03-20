@@ -2384,7 +2384,7 @@ class MainWindow(QMainWindow):
             ("Aluminum Doors.csv", "Aluminum Doors: 6 to 8 weeks", [("Finish", ["Finish"]), ("Glass", ["Glass"]), ("Glass Thickness", ["Glass Thickness"])]),
             ("Misc. Doors.csv", "General Door Types (Compact)", [("Finish", ["Finish"]), ("Elevation", ["Elevation"]), ("Fire Rating", ["Fire Rating"]), ("Core", ["Core"])]),
             ("Misc. Frames.csv", "Frame Types", [("Mat'l", ["Mat'l", "Matl", "Material"]), ("Face", ["Face"]), ("Finish", ["Finish"]), ("Profile", ["Profile"]), ("Sidelite Or Transom", ["Sidelite Or Transom", "Sidelite/Transom"])]),
-            ("Hollow Metal Frames.csv", "HM Frames: 4 to 6 weeks", [("Elevation", ["Elevation"]), ("Fire Rating", ["Fire Rating"]), ("Location", ["Location", "Int/Ext", "Interior/Exterior", "Location (Interior/Exterior)"]), ("Gauge", ["Gauge"]), ("Face", ["Face"]), ("Jamb Profile", ["Jamb Profile"]), ("Construction", ["Construction"]), ("Return", ["Return"]), ("Anchors", ["Anchors"]), ("Sidelite", ["Sidelite"]), ("Transom width", ["Transom width"]), ("Transom Height", ["Transom Height"])]),
+            ("Hollow Metal Frames.csv", "HM Frames: 4 to 6 weeks", [("Elevation", ["Elevation"]), ("Fire Rating", ["Fire Rating"]), ("Location", ["Location", "Int/Ext", "Interior/Exterior", "Location (Interior/Exterior)"]), ("Gauge", ["Gauge"]), ("Face", ["Face"]), ("Jamb Profile", ["Jamb Profile"]), ("Construction", ["Construction"]), ("Return", ["Return"]), ("Anchors", ["Anchors"]), ("Sidelite", ["Sidelite"]), ("Transom Type", ["Transom Type"]), ("Transom Height", ["Transom Height"]), ("Header Continuous", ["Header Continuous", "Header Continue?"]), ("Jamb Continuous", ["Jamb Continuous", "Jamb Continue?"])]),
             ("Aluminum Frames.csv", "AL Frames: 4 to 6 weeks", [("Finish", ["Finish"]), ("2nd Finish", ["2nd Finish", "Second Finish"]), ("Sidelite", ["Sidelite"]), ("Glass Thickness", ["Glass Thickness"]), ("Wet Glaze", ["Wet Glaze"]), ("Applied Stops", ["Applied Stops"])]),
         ]
 
@@ -3108,8 +3108,12 @@ class MainWindow(QMainWindow):
             self._normalize_header_key("sidelite or transom"): "Lite/Transom",
             self._normalize_header_key("jamb profile"): "Jamb Profile",
             self._normalize_header_key("sidelite"): "Sidelite",
-            self._normalize_header_key("transom width"): "Transom Width",
+            self._normalize_header_key("transom type"): "Transom Type",
             self._normalize_header_key("transom height"): "Transom Height",
+            self._normalize_header_key("header continuous"): "Header Continuous",
+            self._normalize_header_key("header continue?"): "Header Continuous",
+            self._normalize_header_key("jamb continuous"): "Jamb Continuous",
+            self._normalize_header_key("jamb continue?"): "Jamb Continuous",
             self._normalize_header_key("wet glaze"): "Wet Glaze",
             self._normalize_header_key("applied stops"): "Applied Stops",
             self._normalize_header_key("construction"): "Construction",
@@ -14723,35 +14727,8 @@ class MainWindow(QMainWindow):
                 return 0.0
 
         def _parse_feet_value(text: str) -> float:
-            if text is None:
-                return 0.0
-            raw = str(text).strip()
-            if not raw:
-                return 0.0
-            cleaned = raw.lower().replace('"', "").replace("inches", "").replace("inch", "").replace("in", "")
-            if "-" in cleaned:
-                parts = cleaned.split("-")
-                try:
-                    feet = float(parts[0]) if parts[0] else 0.0
-                    inches = float(parts[1]) if len(parts) > 1 and parts[1] else 0.0
-                    return feet + (inches / 12.0)
-                except ValueError:
-                    return 0.0
-            if "'" in cleaned:
-                parts = cleaned.split("'")
-                try:
-                    feet = float(parts[0]) if parts[0] else 0.0
-                    inches = 0.0
-                    if len(parts) > 1 and parts[1].strip():
-                        inches = float(parts[1].strip().replace(" ", ""))
-                    return feet + (inches / 12.0)
-                except ValueError:
-                    return 0.0
-            try:
-                value = float(cleaned)
-            except ValueError:
-                return 0.0
-            return value
+            inches_val = self._parse_feet_default_inches(text)
+            return inches_val / 12.0 if inches_val > 0.0 else 0.0
 
         def _load_labor_settings():
             def _get_float(key: str, default: float) -> float:
@@ -23260,8 +23237,10 @@ class MainWindow(QMainWindow):
                     ("Return", ["return"]),
                     ("Anchors", ["anchors"]),
                     ("Sidelite", ["sidelite"]),
-                    ("Transom Width", ["transom width"]),
+                    ("Transom Type", ["transom type"]),
                     ("Transom Height", ["transom height"]),
+                    ("Header Continuous", ["header continuous", "header continue?"]),
+                    ("Jamb Continuous", ["jamb continuous", "jamb continue?"]),
                 ],
             },
             "aluminum_frames": {
@@ -23278,6 +23257,10 @@ class MainWindow(QMainWindow):
                     ("Glass Thickness", ["glass thickness"]),
                     ("Wet Glaze", ["wet glaze"]),
                     ("Applied Stops", ["applied stops"]),
+                    ("Transom Type", ["transom type"]),
+                    ("Transom Height", ["transom height"]),
+                    ("Header Continuous", ["header continuous", "header continue?"]),
+                    ("Jamb Continuous", ["jamb continuous", "jamb continue?"]),
                 ],
             },
             "misc_frames": {
@@ -23901,6 +23884,30 @@ class MainWindow(QMainWindow):
         mixed = _parse_mixed_number(cleaned)
         return mixed if mixed is not None and mixed > 0 else None
 
+    def _parse_feet_default_inches(self, raw_value: str) -> float:
+        """Parse dimension text to inches where bare numeric input means feet.
+
+        Accepted forms:
+        - Bare feet: 3 -> 36"
+        - Architectural: 3-0, 3-4 1/2
+        - Explicit units: 3', 3'-0", 36in
+        """
+        text = str(raw_value or "").strip()
+        if not text:
+            return 0.0
+
+        if any(ch in text for ch in ("'", '"', "-")):
+            return float(self._parse_hm_inches(text) or 0.0)
+
+        lower = text.lower()
+        if any(token in lower for token in ("in", "inch", "inches", "ft", "feet", "foot")):
+            return float(self._parse_hm_inches(text) or 0.0)
+
+        try:
+            return max(0.0, float(text) * 12.0)
+        except ValueError:
+            return float(self._parse_hm_inches(text) or 0.0)
+
     def _format_inches_arch(self, inches_value: float) -> str:
         inches_value = max(0.0, float(inches_value))
         feet = int(inches_value // 12.0)
@@ -24096,6 +24103,30 @@ class MainWindow(QMainWindow):
             frame_headers,
             ["2nd Sidelite Width", "2nd sidelite width", "2nd Sidelite", "Sidelite 2", "Sidelite LH"],
         )
+        sidelite_right_height_idx = self._find_header_idx_aliases(
+            frame_headers,
+            ["Sidelite Height", "Sidelite height", "Sidelite RH Height"],
+        )
+        sidelite_left_height_idx = self._find_header_idx_aliases(
+            frame_headers,
+            ["2nd Sidelite Height", "2nd sidelite height", "Sidelite LH Height"],
+        )
+        transom_type_idx = self._find_header_idx_aliases(
+            frame_headers,
+            ["Transom Type", "Transom"],
+        )
+        transom_height_idx = self._find_header_idx_aliases(
+            frame_headers,
+            ["Transom Height"],
+        )
+        header_continuous_idx = self._find_header_idx_aliases(
+            frame_headers,
+            ["Header Continuous", "Header Continue?"],
+        )
+        jamb_continuous_idx = self._find_header_idx_aliases(
+            frame_headers,
+            ["Jamb Continuous", "Jamb Continue?"],
+        )
 
         if width_idx is None or height_idx is None:
             QMessageBox.warning(
@@ -24113,28 +24144,23 @@ class MainWindow(QMainWindow):
             item = frame_table.item(row_idx, header_idx + table_col_offset)
             return item.text().strip() if item else ""
 
-        def _parse_sidelite_feet_input(raw_value: str) -> float:
-            """Parse sidelite width where bare numbers are entered in feet."""
-            text = str(raw_value or "").strip()
+        def _normalize_transom_type(raw_value: str) -> str:
+            text = str(raw_value or "").strip().lower()
             if not text:
-                return 0.0
+                return "none"
+            if "full" in text:
+                return "full_width"
+            if "door" in text:
+                return "door_only"
+            if "side" in text or "lite" in text:
+                return "sidelite_only"
+            if text in {"none", "no", "n/a", "na"}:
+                return "none"
+            return "none"
 
-            # If the user entered an explicit architectural/inch format, reuse HM parser.
-            if any(ch in text for ch in ("'", '"', "-")):
-                parsed = self._parse_hm_inches(text)
-                return float(parsed or 0.0)
-
-            lower = text.lower()
-            if any(token in lower for token in ("in", "inch", "inches", "ft", "feet", "foot")):
-                parsed = self._parse_hm_inches(text)
-                return float(parsed or 0.0)
-
-            # Bare numeric values in sidelite columns are feet by default.
-            try:
-                return max(0.0, float(text) * 12.0)
-            except ValueError:
-                parsed = self._parse_hm_inches(text)
-                return float(parsed or 0.0)
+        def _parse_boolish(raw_value: str) -> bool:
+            text = str(raw_value or "").strip().lower()
+            return text in {"yes", "y", "true", "1", "checked", "x"}
 
         elevations = []
         for r in range(frame_table.rowCount()):
@@ -24150,6 +24176,12 @@ class MainWindow(QMainWindow):
             finish_text = _cell_text(r, finish_idx)
             sidelite_right_text = _cell_text(r, sidelite_right_idx)
             sidelite_left_text = _cell_text(r, sidelite_left_idx)
+            sidelite_right_height_text = _cell_text(r, sidelite_right_height_idx)
+            sidelite_left_height_text = _cell_text(r, sidelite_left_height_idx)
+            transom_type_text = _cell_text(r, transom_type_idx)
+            transom_height_text = _cell_text(r, transom_height_idx)
+            header_continuous_text = _cell_text(r, header_continuous_idx)
+            jamb_continuous_text = _cell_text(r, jamb_continuous_idx)
 
             if not open_width_text and not open_height_text and not frame_type_text and not opening_text:
                 continue
@@ -24157,8 +24189,19 @@ class MainWindow(QMainWindow):
             open_width_in = self._parse_hm_inches(open_width_text)
             open_height_in = self._parse_hm_inches(open_height_text)
             face_in = self._parse_hm_inches(face_text)
-            sidelite_right_in = _parse_sidelite_feet_input(sidelite_right_text)
-            sidelite_left_in = _parse_sidelite_feet_input(sidelite_left_text)
+            sidelite_right_in = self._parse_feet_default_inches(sidelite_right_text)
+            sidelite_left_in = self._parse_feet_default_inches(sidelite_left_text)
+            sidelite_right_height_in = self._parse_feet_default_inches(sidelite_right_height_text)
+            sidelite_left_height_in = self._parse_feet_default_inches(sidelite_left_height_text)
+            transom_height_in = self._parse_feet_default_inches(transom_height_text)
+            transom_type = _normalize_transom_type(transom_type_text)
+            header_continuous = _parse_boolish(header_continuous_text)
+            jamb_continuous = _parse_boolish(jamb_continuous_text)
+
+            if transom_type == "none" or transom_height_in <= 0.0:
+                transom_type = "none"
+                header_continuous = False
+                jamb_continuous = False
 
             if face_in is None and frame_type_text:
                 for pattern in (
@@ -24207,6 +24250,12 @@ class MainWindow(QMainWindow):
                     "face_assumed": face_assumed,
                     "sidelite_right_in": sidelite_right_in,
                     "sidelite_left_in": sidelite_left_in,
+                    "sidelite_right_height_in": sidelite_right_height_in,
+                    "sidelite_left_height_in": sidelite_left_height_in,
+                    "transom_type": transom_type,
+                    "transom_height_in": transom_height_in,
+                    "header_continuous": header_continuous,
+                    "jamb_continuous": jamb_continuous,
                     "opening_spans": opening_spans,
                     "outside_width_in": outside_width_in,
                     "outside_height_in": outside_height_in,
@@ -24436,6 +24485,12 @@ class MainWindow(QMainWindow):
                 face_in = float(data["face_in"])
                 sidelite_right_in = float(data.get("sidelite_right_in", 0.0) or 0.0)
                 sidelite_left_in = float(data.get("sidelite_left_in", 0.0) or 0.0)
+                sidelite_right_height_in = float(data.get("sidelite_right_height_in", 0.0) or 0.0)
+                sidelite_left_height_in = float(data.get("sidelite_left_height_in", 0.0) or 0.0)
+                transom_type = str(data.get("transom_type") or "none")
+                transom_height_in = float(data.get("transom_height_in", 0.0) or 0.0)
+                header_continuous = bool(data.get("header_continuous"))
+                jamb_continuous = bool(data.get("jamb_continuous"))
                 opening_spans = list(data.get("opening_spans") or [("main", open_width_in)])
 
                 info_lines = [
@@ -24455,6 +24510,16 @@ class MainWindow(QMainWindow):
                     info_lines.append(("TRIM", str(data.get("trim"))))
                 if data.get("finish"):
                     info_lines.append(("FINISH", str(data.get("finish"))))
+                if transom_type != "none":
+                    transom_labels = {
+                        "door_only": "Door Only",
+                        "sidelite_only": "Sidelite Only",
+                        "full_width": "Full Width",
+                    }
+                    info_lines.append(("TRANSOM", transom_labels.get(transom_type, "None")))
+                    info_lines.append(("TRANSOM H", self._format_inches_arch(transom_height_in)))
+                    info_lines.append(("HDR CONT", "Yes" if header_continuous else "No"))
+                    info_lines.append(("JAMB CONT", "Yes" if jamb_continuous else "No"))
 
                 info_h = 78.0
                 drawing_bottom = cell_y + info_h + 10.0
@@ -24479,6 +24544,17 @@ class MainWindow(QMainWindow):
                 pts_per_in = points_per_real_inch
                 sill_y = draw_y + face_w
 
+                has_any_sidelite = any(kind != "main" for kind, _ in opening_spans)
+                has_transom = transom_type != "none" and transom_height_in > 0.0
+                transom_h_pts = max(0.0, transom_height_in * pts_per_in)
+                if has_transom:
+                    max_transom_h = max(0.0, (inner_top_y - sill_y) - 8.0)
+                    transom_h_pts = min(transom_h_pts, max_transom_h)
+                    has_transom = transom_h_pts > 0.0
+                if transom_type == "sidelite_only" and not has_any_sidelite:
+                    has_transom = False
+                transom_bottom_y = inner_top_y - transom_h_pts if has_transom else inner_top_y
+
                 pdf.setLineWidth(1.4)
                 pdf.line(draw_x, draw_y, draw_x, top_y)
                 pdf.line(right_x, draw_y, right_x, top_y)
@@ -24491,24 +24567,52 @@ class MainWindow(QMainWindow):
                     span_w = max(0.0, float(span_width_in)) * pts_per_in
                     left_open_x = x_cursor
                     right_open_x = x_cursor + span_w
+                    span_has_transom = has_transom and (
+                        transom_type == "full_width"
+                        or (transom_type == "door_only" and span_kind == "main")
+                        or (transom_type == "sidelite_only" and span_kind != "main")
+                    )
+                    span_top_y = transom_bottom_y if span_has_transom else inner_top_y
                     span_layouts.append(
                         {
                             "kind": span_kind,
                             "left_open_x": left_open_x,
                             "right_open_x": right_open_x,
                             "width_in": float(span_width_in),
+                            "has_transom": span_has_transom,
+                            "top_y": span_top_y,
                         }
                     )
                     if span_kind == "main":
-                        pdf.line(left_open_x, draw_y, left_open_x, inner_top_y)
-                        pdf.line(right_open_x, draw_y, right_open_x, inner_top_y)
+                        pdf.line(left_open_x, draw_y, left_open_x, span_top_y)
+                        pdf.line(right_open_x, draw_y, right_open_x, span_top_y)
                     else:
-                        pdf.line(left_open_x, sill_y, left_open_x, inner_top_y)
-                        pdf.line(right_open_x, sill_y, right_open_x, inner_top_y)
+                        pdf.line(left_open_x, sill_y, left_open_x, span_top_y)
+                        pdf.line(right_open_x, sill_y, right_open_x, span_top_y)
                         pdf.line(left_open_x, sill_y, right_open_x, sill_y)
                         pdf.line(left_open_x - face_w, draw_y, right_open_x + face_w, draw_y)
+
+                    if span_has_transom and jamb_continuous:
+                        pdf.line(left_open_x, transom_bottom_y, left_open_x, inner_top_y)
+                        pdf.line(right_open_x, transom_bottom_y, right_open_x, inner_top_y)
+
                     x_cursor = right_open_x + face_w
                 pdf.line(inner_left_x, inner_top_y, inner_right_x, inner_top_y)
+
+                if has_transom:
+                    if header_continuous:
+                        pdf.line(inner_left_x, transom_bottom_y, inner_right_x, transom_bottom_y)
+                    else:
+                        for span in span_layouts:
+                            if span["has_transom"]:
+                                pdf.line(float(span["left_open_x"]), transom_bottom_y, float(span["right_open_x"]), transom_bottom_y)
+
+                    _draw_v_dim(
+                        right_x + 12.0,
+                        transom_bottom_y,
+                        inner_top_y,
+                        _fit_text(self._format_inches_arch(transom_height_in), "Helvetica-Bold", 9, 52.0),
+                    )
 
                 for span in span_layouts:
                     if span["kind"] == "main":
@@ -24522,7 +24626,7 @@ class MainWindow(QMainWindow):
                         _draw_v_dim(
                             float(span["left_open_x"]) - 12.0,
                             draw_y,
-                            inner_top_y,
+                            float(span["top_y"]),
                             _fit_text(self._format_inches_arch(open_height_in), "Helvetica-Bold", 9, 56.0),
                         )
                     else:
@@ -24536,8 +24640,17 @@ class MainWindow(QMainWindow):
                         _draw_v_dim(
                             float(span["left_open_x"]) - 10.0 if span["kind"] == "left_sidelite" else float(span["right_open_x"]) + 10.0,
                             sill_y,
-                            inner_top_y,
-                            _fit_text(self._format_inches_arch(max(0.0, open_height_in - face_in)), "Helvetica-Bold", 9, 48.0),
+                            float(span["top_y"]),
+                            _fit_text(
+                                self._format_inches_arch(
+                                    sidelite_left_height_in if span["kind"] == "left_sidelite" and sidelite_left_height_in > 0.0
+                                    else sidelite_right_height_in if span["kind"] == "right_sidelite" and sidelite_right_height_in > 0.0
+                                    else max(0.0, open_height_in - face_in)
+                                ),
+                                "Helvetica-Bold",
+                                9,
+                                48.0,
+                            ),
                         )
 
                 text_y = cell_y + 62.0
