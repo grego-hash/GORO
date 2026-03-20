@@ -42,6 +42,7 @@ from core.constants import APP_NAME, ORG_NAME
 from core.models import resolve_data_root
 from .main_window_hw_groups import write_hardware_groups_pdf
 from .main_window_hardware_groups_widget import (
+    _ensure_single_trailing_blank_row,
     _trim_trailing_blank_rows,
     _get_dropdown_values_for_header,
     load_dropdown_options,
