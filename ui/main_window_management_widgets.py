@@ -11,9 +11,11 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -702,6 +704,7 @@ class MyCompanyWidget(QWidget):
             "phone": "",
             "website": "",
             "email": "",
+            "accent_color": "#7a0000",
         }
         self.company_contacts = []
 
@@ -828,6 +831,28 @@ class MyCompanyWidget(QWidget):
         main_layout.addWidget(labor_label)
         main_layout.addLayout(labor_row)
 
+        accent_label = QLabel("Accent Color")
+        accent_label.setStyleSheet("font-weight: bold; font-size: 12px; margin-top: 10px;")
+
+        accent_row = QHBoxLayout()
+        self.accent_swatch = QFrame()
+        self.accent_swatch.setFixedSize(36, 24)
+        self.accent_swatch.setFrameShape(QFrame.Shape.Box)
+        self._update_swatch(self.company_info["accent_color"])
+
+        btn_pick_color = QPushButton("Choose Color...")
+        btn_pick_color.clicked.connect(self.pick_accent_color)
+        btn_reset_color = QPushButton("Reset to Default")
+        btn_reset_color.clicked.connect(self.reset_accent_color)
+
+        accent_row.addWidget(self.accent_swatch)
+        accent_row.addWidget(btn_pick_color)
+        accent_row.addWidget(btn_reset_color)
+        accent_row.addStretch()
+
+        main_layout.addWidget(accent_label)
+        main_layout.addLayout(accent_row)
+
         main_layout.addWidget(logo_label)
         main_layout.addLayout(logo_row)
 
@@ -846,6 +871,7 @@ class MyCompanyWidget(QWidget):
                         self.company_info["phone"] = row.get("Phone", "").strip()
                         self.company_info["website"] = row.get("Website", "").strip()
                         self.company_info["email"] = row.get("Email", "").strip()
+                        self.company_info["accent_color"] = row.get("Accent Color", "").strip() or "#7a0000"
             except Exception:
                 pass
 
@@ -883,6 +909,7 @@ class MyCompanyWidget(QWidget):
         self.company_website_field.blockSignals(False)
         self.company_email_field.blockSignals(False)
 
+        self._update_swatch(self.company_info["accent_color"])
         self._load_contacts_table()
         self._refresh_logo_status()
         self.changes_made = False
@@ -904,6 +931,25 @@ class MyCompanyWidget(QWidget):
             self.contacts_table.setItem(row, 4, QTableWidgetItem(phone))
         self.contacts_table.blockSignals(False)
 
+    def _update_swatch(self, hex_color: str):
+        self.accent_swatch.setStyleSheet(
+            f"background-color: {hex_color}; border: 1px solid #555;"
+        )
+
+    def pick_accent_color(self):
+        current = QColor(self.company_info.get("accent_color", "#7a0000"))
+        color = QColorDialog.getColor(current, self, "Select Accent Color")
+        if color.isValid():
+            hex_val = color.name()  # e.g. '#ab1234'
+            self.company_info["accent_color"] = hex_val
+            self._update_swatch(hex_val)
+            self.changes_made = True
+
+    def reset_accent_color(self):
+        self.company_info["accent_color"] = "#7a0000"
+        self._update_swatch("#7a0000")
+        self.changes_made = True
+
     def _refresh_logo_status(self):
         if self.logo_path.exists():
             self.logo_status_label.setText(f"Logo: {self.logo_path.name}")
@@ -917,6 +963,7 @@ class MyCompanyWidget(QWidget):
             "phone": self.company_phone_field.text().strip(),
             "website": self.company_website_field.text().strip(),
             "email": self.company_email_field.text().strip(),
+            "accent_color": self.company_info.get("accent_color", "#7a0000"),
         }
         self.changes_made = True
 
@@ -1009,12 +1056,13 @@ class MyCompanyWidget(QWidget):
         self.update_contacts_from_table()
         self.data_path.mkdir(parents=True, exist_ok=True)
 
-        info_rows = [["Company Name", "Address", "Phone", "Website", "Email"], [
+        info_rows = [["Company Name", "Address", "Phone", "Website", "Email", "Accent Color"], [
             self.company_info.get("name", ""),
             self.company_info.get("address", ""),
             self.company_info.get("phone", ""),
             self.company_info.get("website", ""),
             self.company_info.get("email", ""),
+            self.company_info.get("accent_color", "#7a0000"),
         ]]
 
         with open(self.company_info_csv, 'w', newline='', encoding='utf-8-sig') as f:

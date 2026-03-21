@@ -2,6 +2,7 @@
 
 import csv
 import re
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +40,14 @@ from PyQt6.QtWidgets import (
 )
 
 from core.constants import APP_NAME, ORG_NAME
+from core.email_utils import (
+    filter_table_by_vendor,
+    get_vendor_list_from_table,
+    launch_outlook_with_pdf,
+    load_vendor_contacts,
+)
 from core.models import resolve_data_root
+from .dialogs import VendorQuoteDialog
 from .main_window_hw_groups import write_hardware_groups_pdf
 from .main_window_hardware_groups_widget import (
     _ensure_single_trailing_blank_row,
@@ -109,6 +117,11 @@ class CombinedHardwareWidget(QWidget):
         consolidate_button.setMaximumWidth(160)
         left_header_layout.addWidget(consolidate_button)
 
+        email_quote_button = QPushButton("Email Quote")
+        email_quote_button.clicked.connect(self.email_hardware_quote)
+        email_quote_button.setMaximumWidth(140)
+        left_header_layout.addWidget(email_quote_button)
+
         left_label = QLabel("Hardware - All Parts")
         left_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         left_header_layout.addWidget(left_label)
@@ -146,7 +159,7 @@ class CombinedHardwareWidget(QWidget):
         self.hardware_table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | 
                                            QAbstractItemView.EditTrigger.EditKeyPressed | 
                                            QAbstractItemView.EditTrigger.AnyKeyPressed)
-        self.hardware_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.hardware_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.hardware_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.hardware_table.setStyleSheet("""
             QTableWidget {
@@ -911,6 +924,251 @@ class CombinedHardwareWidget(QWidget):
                 pass
         
         return vendors_data
+
+    def _collect_hardware_table_data(self) -> List[dict]:
+        """Return hardware table rows as dictionaries keyed by hardware headers."""
+        self.commit_pending_edits()
+
+        table_data: List[dict] = []
+        for row_idx in range(self.hardware_table.rowCount()):
+            if self._is_hardware_row_blank(row_idx):
+                continue
+
+            row_dict = {}
+            for col_idx, header in enumerate(self.hardware_all_headers):
+                item = self.hardware_table.item(row_idx, col_idx + 1)
+                row_dict[header] = item.text().strip() if item else ""
+            table_data.append(row_dict)
+
+        return table_data
+
+    def _get_hardware_quote_bid_context(self) -> tuple[Optional[object], Optional[Path], str]:
+        """Find the hosting main window, current bid path, and display name for email subjects."""
+        host = self.parent()
+        while host is not None:
+            if hasattr(host, "_log_vendor_quote_as_communication"):
+                break
+            parent_getter = getattr(host, "parent", None)
+            host = parent_getter() if callable(parent_getter) else None
+
+        bid_path = None
+        bid_name = ""
+
+        if host is not None:
+            candidate_path = getattr(host, "_current_editing_path", None)
+            if isinstance(candidate_path, Path):
+                bid_path = candidate_path
+                bid_name = candidate_path.name
+
+        if not bid_name and isinstance(self.workbook_path, Path):
+            bid_path = self.workbook_path.parent.parent if len(self.workbook_path.parents) >= 2 else self.workbook_path.parent
+            bid_name = bid_path.name if isinstance(bid_path, Path) else ""
+
+        return host, bid_path if isinstance(bid_path, Path) else None, bid_name
+
+    def _resolve_vendor_contacts_csv(self) -> Path:
+        """Resolve the vendor contacts CSV used for quote emails."""
+        if isinstance(self.workbook_path, Path):
+            root_path = self.workbook_path
+            while root_path.parent != root_path:
+                candidate = root_path.parent / "vendors_contacts.csv"
+                if candidate.exists():
+                    return candidate
+                root_path = root_path.parent
+
+        settings = QSettings(ORG_NAME, APP_NAME)
+        return resolve_data_root(settings) / "vendors_contacts.csv"
+
+    def email_hardware_quote(self) -> None:
+        """Email a vendor quote for the hardware table using a hardware-only PDF layout."""
+        if not HAS_REPORTLAB:
+            QMessageBox.warning(
+                self,
+                "Email Quote",
+                "ReportLab is not installed. Run: pip install reportlab",
+            )
+            return
+
+        try:
+            table_data = self._collect_hardware_table_data()
+            vendors = get_vendor_list_from_table(table_data, vendor_column="Vendor")
+
+            if not vendors:
+                QMessageBox.warning(
+                    self,
+                    "No Vendors",
+                    "No vendors found in the Hardware table. Add vendors to rows before emailing quotes.",
+                )
+                return
+
+            vendor_dlg = VendorQuoteDialog(vendors, self)
+            if vendor_dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            selected_vendor = vendor_dlg.get_selected_vendor()
+            filtered_data = filter_table_by_vendor(table_data, selected_vendor, vendor_column="Vendor")
+            if not filtered_data:
+                QMessageBox.warning(self, "No Data", f"No hardware rows found for vendor: {selected_vendor}")
+                return
+
+            vendor_contacts = load_vendor_contacts(self._resolve_vendor_contacts_csv())
+            vendor_email = vendor_contacts.get(selected_vendor, "")
+            if not vendor_email:
+                available_vendors = ", ".join(vendor_contacts.keys()) if vendor_contacts else "None"
+                QMessageBox.warning(
+                    self,
+                    "Vendor Not Found",
+                    f"No email found for vendor: '{selected_vendor}'\n\n"
+                    f"Available vendors:\n{available_vendors}\n\n"
+                    "Please check the vendor name in the Hardware table matches vendors_contacts.csv.",
+                )
+                return
+
+            host, bid_path, bid_name = self._get_hardware_quote_bid_context()
+            pdf_path = self._generate_hardware_quote_pdf(selected_vendor, filtered_data, bid_name)
+            if not pdf_path:
+                QMessageBox.warning(self, "PDF Error", "Failed to generate the hardware quote PDF.")
+                return
+
+            settings = QSettings(ORG_NAME, APP_NAME)
+            email_body = settings.value(
+                "quote_email_template",
+                "Hello,\n\nPlease provide a quote for the items listed in the attached PDF.\n\nThank you,\nBid Team",
+                type=str,
+            )
+
+            bid_prefix = f"{bid_name} - " if bid_name else ""
+            email_subject = f"Quote Request - {bid_prefix}Hardware - {selected_vendor}"
+            success = launch_outlook_with_pdf(
+                recipient_email=vendor_email,
+                subject=email_subject,
+                body=email_body,
+                pdf_path=pdf_path,
+            )
+
+            if not success:
+                QMessageBox.warning(self, "Error", f"Could not launch Outlook. PDF saved to:\n{pdf_path}")
+                return
+
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Email opened in Outlook for {selected_vendor}\n\n"
+                f"Email: {vendor_email}\n"
+                f"PDF: {pdf_path.name}",
+            )
+
+            if host is not None and bid_path and bid_path.exists():
+                try:
+                    host._log_vendor_quote_as_communication(
+                        bid_path=bid_path,
+                        table_name="Hardware",
+                        vendor_name=selected_vendor,
+                        vendor_email=vendor_email,
+                        pdf_path=pdf_path,
+                        email_subject=email_subject,
+                        email_body=email_body,
+                    )
+                except Exception:
+                    pass
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Failed to email hardware quote:\n{exc}")
+
+    def _generate_hardware_quote_pdf(
+        self,
+        vendor_name: str,
+        data: List[dict],
+        bid_name: str = "",
+    ) -> Optional[Path]:
+        """Generate a letter-size portrait PDF for the selected hardware vendor."""
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.lib.units import inch
+            from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+            temp_dir = Path(tempfile.gettempdir()) / "GORO_Quotes"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pdf_path = temp_dir / f"Hardware_{vendor_name.replace(' ', '_')}_{timestamp}.pdf"
+
+            doc = SimpleDocTemplate(
+                str(pdf_path),
+                pagesize=letter,
+                leftMargin=0.5 * inch,
+                rightMargin=0.5 * inch,
+                topMargin=0.5 * inch,
+                bottomMargin=0.5 * inch,
+            )
+
+            styles = getSampleStyleSheet()
+            elements = []
+
+            from core.constants import load_company_accent_color, accent_text_color
+            _accent = load_company_accent_color()
+            _hdr_txt = accent_text_color(_accent)
+
+            from reportlab.lib.styles import ParagraphStyle
+            title_style = ParagraphStyle(
+                'AccentTitle',
+                parent=styles['Heading2'],
+                textColor=colors.HexColor(_accent),
+            )
+            bid_prefix = f"{bid_name} - " if bid_name else ""
+            elements.append(
+                Paragraph(
+                    f"<b>{bid_prefix}Hardware - Quote Request for {vendor_name}</b>",
+                    title_style,
+                )
+            )
+            elements.append(Spacer(1, 0.2 * inch))
+
+            display_columns = [
+                ("Manufacturer", ["MFR", "Manufacturer"]),
+                ("Part", ["Hardware Part", "Part", "Part Name"]),
+                ("Finish", ["Finish"]),
+                ("Category", ["Category"]),
+                ("Count", ["COUNT", "Count", "Qty", "Quantity"]),
+            ]
+
+            resolved_columns = []
+            sample_row = data[0] if data else {}
+            for label, aliases in display_columns:
+                actual_key = next((alias for alias in aliases if alias in sample_row), aliases[0])
+                resolved_columns.append((label, actual_key))
+
+            table_rows = [[label for label, _ in resolved_columns]]
+            for row in data:
+                table_rows.append([str(row.get(actual_key, "")).strip() for _, actual_key in resolved_columns])
+
+            col_widths = [1.3 * inch, 2.9 * inch, 1.0 * inch, 1.45 * inch, 0.85 * inch]
+            quote_table = Table(table_rows, colWidths=col_widths, repeatRows=1)
+            quote_table.setStyle(
+                TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_accent)),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor(_hdr_txt)),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f0f0f0")]),
+                    ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),
+                    ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                    ("FONTSIZE", (0, 1), (-1, -1), 8),
+                    ("ALIGN", (0, 0), (-2, -1), "LEFT"),
+                    ("ALIGN", (-1, 1), (-1, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                ])
+            )
+            elements.append(quote_table)
+            doc.build(elements)
+            return pdf_path
+        except Exception:
+            return None
     
     def on_hardware_table_clicked(self, item):
         """Handle hardware table clicks (especially checkbox changes)."""

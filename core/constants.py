@@ -30,6 +30,44 @@ PROJECT_STATUSES = ["Submittals", "Production", "Installation", "Punchlist", "Co
 # Light red for overdue rows
 OVERDUE_BG = QColor(255, 235, 235)
 
+DEFAULT_ACCENT_COLOR = "#7a0000"
+
+
+def load_company_accent_color(data_root=None) -> str:
+    """Return the company accent colour hex string from company_info.csv."""
+    import csv
+    from pathlib import Path
+
+    if data_root is None:
+        data_root = Path(__file__).resolve().parent.parent / "data"
+    else:
+        data_root = Path(data_root)
+    ci_path = data_root / "company_info.csv"
+    try:
+        if ci_path.exists():
+            with open(ci_path, "r", newline="", encoding="utf-8-sig") as f:
+                for row in csv.DictReader(f):
+                    val = row.get("Accent Color", "").strip()
+                    if val:
+                        return val
+                    break
+    except Exception:
+        pass
+    return DEFAULT_ACCENT_COLOR
+
+
+def accent_text_color(hex_bg: str) -> str:
+    """Return '#ffffff' or '#000000' for best contrast against *hex_bg*."""
+    h = hex_bg.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except (ValueError, IndexError):
+        return "#ffffff"
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    return "#000000" if luminance > 150 else "#ffffff"
+
 
 
 

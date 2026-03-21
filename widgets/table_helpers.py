@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QStyledItemDelegate,
     QTableWidget,
+    QTableWidgetSelectionRange,
     QTableWidgetItem,
     QWidget,
 )
@@ -28,6 +29,11 @@ class ComboBoxDelegate(QStyledItemDelegate):
         combo = QComboBox(parent)
         combo.setEditable(self.editable)
         combo.addItems(self.items)
+        if self.editable:
+            combo.setCurrentIndex(-1)
+            line_edit = combo.lineEdit()
+            if line_edit is not None:
+                line_edit.clear()
         return combo
 
     def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
@@ -37,6 +43,11 @@ class ComboBoxDelegate(QStyledItemDelegate):
             value = index.data(Qt.ItemDataRole.EditRole)
             if value:
                 editor.setCurrentText(str(value))
+            elif self.editable:
+                editor.setCurrentIndex(-1)
+                line_edit = editor.lineEdit()
+                if line_edit is not None:
+                    line_edit.clear()
 
     def setModelData(self, editor: QWidget, model: QAbstractItemModel, index: QModelIndex) -> None:
         if isinstance(editor, QComboBox):
@@ -85,6 +96,146 @@ class NoRowHeaderTable(QTableWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.verticalHeader().setVisible(False)
+
+    def keyPressEvent(self, event) -> None:
+        if event.matches(QKeySequence.StandardKey.Copy):
+            if self.copy_selected_cells_to_clipboard():
+                event.accept()
+                return
+        if (
+            event.key() == Qt.Key.Key_D
+            and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        ):
+            if self.fill_selection_down():
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def copy_selected_cells_to_clipboard(self) -> bool:
+        """Copy the current cell selection as a tab-separated block."""
+        selected_ranges = self.selectedRanges()
+        if not selected_ranges:
+            return False
+
+        blocks: list[str] = []
+        for selected_range in selected_ranges:
+            lines: list[str] = []
+            for row in range(selected_range.topRow(), selected_range.bottomRow() + 1):
+                row_values: list[str] = []
+                for col in range(selected_range.leftColumn(), selected_range.rightColumn() + 1):
+                    if self.isColumnHidden(col):
+                        continue
+                    item = self.item(row, col)
+                    if item is None:
+                        row_values.append("")
+                        continue
+                    if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                        row_values.append("Yes" if item.checkState() == Qt.CheckState.Checked else "")
+                    else:
+                        row_values.append(item.text())
+                lines.append("\t".join(row_values))
+            if lines:
+                blocks.append("\n".join(lines))
+
+        if not blocks:
+            return False
+
+        QApplication.clipboard().setText("\n\n".join(blocks))
+        return True
+
+    def fill_selection_down(self) -> bool:
+        """Fill selected cells downward from the top value in each selected column."""
+        selected_ranges = self.selectedRanges()
+        if not selected_ranges:
+            current = self.currentIndex()
+            if not current.isValid():
+                return False
+            selected_ranges = [
+                QTableWidgetSelectionRange(
+                    current.row(),
+                    current.column(),
+                    current.row(),
+                    current.column(),
+                )
+            ]
+
+        changed = False
+        for selected_range in selected_ranges:
+            top_row = selected_range.topRow()
+            bottom_row = selected_range.bottomRow()
+            left_col = selected_range.leftColumn()
+            right_col = selected_range.rightColumn()
+
+            for col in range(left_col, right_col + 1):
+                if self.isColumnHidden(col):
+                    continue
+
+                source_row = self._find_fill_source_row(top_row, bottom_row, col)
+                if source_row is None:
+                    continue
+
+                source_item = self.item(source_row, col)
+                source_text = source_item.text() if source_item else ""
+                source_checked = (
+                    source_item.checkState() if source_item and source_item.flags() & Qt.ItemFlag.ItemIsUserCheckable
+                    else Qt.CheckState.Unchecked
+                )
+
+                if top_row == bottom_row:
+                    target_rows = [top_row]
+                    if source_row == top_row:
+                        continue
+                else:
+                    target_rows = [
+                        row for row in range(top_row, bottom_row + 1)
+                        if row != source_row and not self.isRowHidden(row)
+                    ]
+
+                for row in target_rows:
+                    if self.isRowHidden(row):
+                        continue
+
+                    target_item = self.item(row, col)
+                    if target_item is None:
+                        target_item = QTableWidgetItem("")
+                        self.setItem(row, col, target_item)
+
+                    if not (target_item.flags() & Qt.ItemFlag.ItemIsEditable) and not (
+                        target_item.flags() & Qt.ItemFlag.ItemIsUserCheckable
+                    ):
+                        continue
+
+                    if target_item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                        target_item.setCheckState(source_checked)
+                        target_item.setText("")
+                    else:
+                        target_item.setText(source_text)
+                    changed = True
+
+        return changed
+
+    def _find_fill_source_row(self, top_row: int, bottom_row: int, col: int) -> Optional[int]:
+        """Return the preferred source row for fill-down in a column."""
+        for row in range(top_row, bottom_row + 1):
+            if self.isRowHidden(row):
+                continue
+            item = self.item(row, col)
+            if item is None:
+                continue
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                return row
+            if item.text().strip():
+                return row
+
+        for row in range(top_row - 1, -1, -1):
+            if self.isRowHidden(row):
+                continue
+            return row
+
+        for row in range(top_row, bottom_row + 1):
+            if not self.isRowHidden(row):
+                return row
+        return None
 
 
 class HardwarePasteEventFilter(QObject):

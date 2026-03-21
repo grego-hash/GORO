@@ -8005,6 +8005,18 @@ class MainWindow(QMainWindow):
         self.estimators_list = self._load_company_position_names("Estimator")
         self.project_managers_list = self._load_company_position_names("Project Manager")
 
+    def _load_company_accent_color(self) -> str:
+        """Return the company accent colour hex string."""
+        from core.constants import load_company_accent_color
+        root = getattr(getattr(self, 'paths', None), 'root', None)
+        return load_company_accent_color(root)
+
+    @staticmethod
+    def _accent_text_color(hex_bg: str) -> str:
+        """Return '#ffffff' or '#000000' for best contrast against *hex_bg*."""
+        from core.constants import accent_text_color
+        return accent_text_color(hex_bg)
+
     def _load_customers(self) -> List[str]:
         """Load customers from customers_info.csv."""
         customers_info_path = self.paths.root / "customers_info.csv"
@@ -13132,10 +13144,17 @@ class MainWindow(QMainWindow):
             styles = getSampleStyleSheet()
             
             # Add title with bid name if available
+            from reportlab.lib.styles import ParagraphStyle
+            _accent = self._load_company_accent_color()
+            title_style = ParagraphStyle(
+                'AccentTitle',
+                parent=styles['Heading1'],
+                textColor=colors.HexColor(_accent),
+            )
             bid_prefix = f"{bid_name} - " if bid_name else ""
             title = Paragraph(
                 f"<b>{bid_prefix}{table_name} - Quote Request for {vendor_name}</b>",
-                styles['Heading1']
+                title_style
             )
             elements.append(title)
             elements.append(Spacer(1, 0.3 * inch))
@@ -13218,10 +13237,12 @@ class MainWindow(QMainWindow):
                     col_widths = [equal_width] * column_count
             
             # Create table
+            _accent = self._load_company_accent_color()
+            _hdr_text_c = colors.HexColor(self._accent_text_color(_accent))
             table = Table(table_data_list, colWidths=col_widths, repeatRows=1)
             table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(_accent)),
+                ('TEXTCOLOR', (0, 0), (-1, 0), _hdr_text_c),
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), header_font_size),
@@ -15434,25 +15455,27 @@ class MainWindow(QMainWindow):
                 wrap_style.fontSize = 7
                 wrap_style.leading = 9
                 
-                # Create white text style for headers
+                # Create header text style – colour adapts to accent background
+                _accent = self._load_company_accent_color()
+                _hdr_text = colors.HexColor(self._accent_text_color(_accent))
                 header_wrap_style = getSampleStyleSheet()['BodyText']
                 header_wrap_style.fontSize = 7
                 header_wrap_style.leading = 9
-                header_wrap_style.textColor = colors.white
+                header_wrap_style.textColor = _hdr_text
                 
-                # Create white text styles for title and headings
+                # Create text styles for title and headings
                 from reportlab.lib.styles import ParagraphStyle
                 title_style = ParagraphStyle(
                     'DarkTitle',
                     parent=styles['Title'],
-                    textColor=colors.black,
+                    textColor=colors.HexColor(_accent),
                     fontSize=14,
                     spaceAfter=12,
                 )
                 heading_style = ParagraphStyle(
-                    'WhiteHeading2',
+                    'AccentHeading2',
                     parent=styles['Heading2'],
-                    textColor=colors.white,
+                    textColor=_hdr_text,
                     fontSize=10,
                     spaceAfter=6,
                 )
@@ -15480,8 +15503,8 @@ class MainWindow(QMainWindow):
                     
                     table = Table(data, colWidths=col_widths, repeatRows=1)
                     table.setStyle(TableStyle([
-                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7a0000')),
-                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(_accent)),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), _hdr_text),
                         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                         ('FONTSIZE', (0, 0), (-1, -1), 7),
                         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
@@ -15764,7 +15787,9 @@ class MainWindow(QMainWindow):
                     f"color: {c['text_primary']};"
                 )
                 label_style = f"color: {c['text_primary']};"
-                section_bar_style = "background-color: #7a0000; color: #ffffff; font-weight: 700; padding: 6px 10px;"
+                _accent = self._load_company_accent_color()
+                _accent_txt = self._accent_text_color(_accent)
+                section_bar_style = f"background-color: {_accent}; color: {_accent_txt}; font-weight: 700; padding: 6px 10px;"
 
                 data_map = {}
                 for row in data_rows:
@@ -15820,12 +15845,12 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 company_label = QLabel(_company_name)
-                company_label.setStyleSheet("font-size: 20px; font-weight: 700;")
+                company_label.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {_accent};")
                 company_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 header_layout.addWidget(company_label)
 
                 proposal_title = QLabel("Proposal")
-                proposal_title.setStyleSheet("font-size: 16px; font-weight: 700;")
+                proposal_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {_accent};")
                 proposal_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 header_layout.addWidget(proposal_title)
 
@@ -21159,6 +21184,7 @@ class MainWindow(QMainWindow):
                 focused_table = None
                 focused_row = -1
                 focused_col = -1
+                focused_selection_ranges = []
                 focused_non_table_widget = None
 
                 if focus_widget is not None:
@@ -21175,6 +21201,13 @@ class MainWindow(QMainWindow):
                 if isinstance(focused_table, QTableWidget):
                     focused_row = focused_table.currentRow()
                     focused_col = focused_table.currentColumn()
+                    for selected_range in focused_table.selectedRanges():
+                        focused_selection_ranges.append((
+                            selected_range.topRow(),
+                            selected_range.leftColumn(),
+                            selected_range.bottomRow(),
+                            selected_range.rightColumn(),
+                        ))
                 elif focus_widget is not None:
                     focused_non_table_widget = focus_widget
                     # Avoid clearing focus during normal autosave; doing so can shift
@@ -21334,6 +21367,17 @@ class MainWindow(QMainWindow):
                             target_row = focused_row if 0 <= focused_row < focused_table.rowCount() else min(max(0, focused_table.currentRow()), focused_table.rowCount() - 1)
                             target_col = focused_col if 0 <= focused_col < focused_table.columnCount() else min(max(0, focused_table.currentColumn()), focused_table.columnCount() - 1)
                             focused_table.setCurrentCell(target_row, target_col)
+                            if focused_selection_ranges:
+                                focused_table.clearSelection()
+                                for top_row, left_col, bottom_row, right_col in focused_selection_ranges:
+                                    if top_row >= focused_table.rowCount() or left_col >= focused_table.columnCount():
+                                        continue
+                                    safe_bottom = min(bottom_row, focused_table.rowCount() - 1)
+                                    safe_right = min(right_col, focused_table.columnCount() - 1)
+                                    focused_table.setRangeSelected(
+                                        QTableWidgetSelectionRange(top_row, left_col, safe_bottom, safe_right),
+                                        True,
+                                    )
                             focused_table.setFocus(Qt.FocusReason.OtherFocusReason)
                     except RuntimeError:
                         pass
@@ -22458,6 +22502,10 @@ class MainWindow(QMainWindow):
             pf = getattr(table, "_table_paste_filter", None)
             if pf is not None:
                 pf.handle_copy()
+                return
+            copy_method = getattr(table, "copy_selected_cells_to_clipboard", None)
+            if callable(copy_method):
+                copy_method()
 
         def _trigger_active_table_fill_down():
             table = _resolve_active_table_for_shortcuts()
@@ -22466,6 +22514,10 @@ class MainWindow(QMainWindow):
             pf = getattr(table, "_table_paste_filter", None)
             if pf is not None:
                 pf.handle_fill_down()
+                return
+            fill_method = getattr(table, "fill_selection_down", None)
+            if callable(fill_method):
+                fill_method()
 
         def _trigger_active_table_duplicate_rows():
             table = _resolve_active_table_for_shortcuts()
@@ -30006,15 +30058,17 @@ class MainWindow(QMainWindow):
             wrap_style.fontSize = 7
             wrap_style.leading = 9
             
+            _accent = self._load_company_accent_color()
+            _hdr_text = colors.HexColor(self._accent_text_color(_accent))
             header_wrap_style = getSampleStyleSheet()['BodyText']
             header_wrap_style.fontSize = 7
             header_wrap_style.leading = 9
-            header_wrap_style.textColor = colors.white
+            header_wrap_style.textColor = _hdr_text
             
             title_style = ParagraphStyle(
                 'DarkTitle',
                 parent=styles['Title'],
-                textColor=colors.black,
+                textColor=colors.HexColor(_accent),
                 fontSize=14,
                 spaceAfter=12,
             )
@@ -30038,8 +30092,8 @@ class MainWindow(QMainWindow):
             
             table = Table(data, colWidths=col_widths, repeatRows=1)
             table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7a0000')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(_accent)),
+                ('TEXTCOLOR', (0, 0), (-1, 0), _hdr_text),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ('FONTSIZE', (0, 0), (-1, -1), 7),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
@@ -30177,13 +30231,15 @@ class MainWindow(QMainWindow):
         page_width, page_height = letter
         margin = 0.75 * inch
         content_width = page_width - (2 * margin)
-        red = colors.HexColor("#7a0000")
+        _accent_hex = self._load_company_accent_color()
+        accent_bg = colors.HexColor(_accent_hex)
+        accent_fg = colors.HexColor(self._accent_text_color(_accent_hex))
 
         def draw_section_bar(c, y, text):
             bar_height = 20
-            c.setFillColor(red)
+            c.setFillColor(accent_bg)
             c.rect(margin, y - bar_height, content_width, bar_height, stroke=0, fill=1)
-            c.setFillColor(colors.white)
+            c.setFillColor(accent_fg)
             c.setFont("Helvetica-Bold", 8)
             c.drawCentredString(page_width / 2, y - bar_height + 6, text)
             c.setFillColor(colors.black)
@@ -30237,7 +30293,7 @@ class MainWindow(QMainWindow):
             y -= target_height + 14
 
         c.setFont("Helvetica-Bold", 16)
-        c.setFillColor(colors.black)
+        c.setFillColor(accent_bg)
         c.drawCentredString(page_width / 2, y, "Proposal")
         y -= 18
 
