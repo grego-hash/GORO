@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 def _has_pdfinfo(bin_dir: Path) -> bool:
@@ -32,7 +33,7 @@ def _find_poppler_bin(base_dir: Path) -> str | None:
     return None
 
 
-def get_poppler_path():
+def get_poppler_path() -> Optional[str]:
     """
     Get the path to Poppler.
     

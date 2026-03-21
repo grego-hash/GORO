@@ -2384,7 +2384,7 @@ class MainWindow(QMainWindow):
             ("Aluminum Doors.csv", "Aluminum Doors: 6 to 8 weeks", [("Finish", ["Finish"]), ("Glass", ["Glass"]), ("Glass Thickness", ["Glass Thickness"])]),
             ("Misc. Doors.csv", "General Door Types (Compact)", [("Finish", ["Finish"]), ("Elevation", ["Elevation"]), ("Fire Rating", ["Fire Rating"]), ("Core", ["Core"])]),
             ("Misc. Frames.csv", "Frame Types", [("Mat'l", ["Mat'l", "Matl", "Material"]), ("Face", ["Face"]), ("Finish", ["Finish"]), ("Profile", ["Profile"]), ("Sidelite Or Transom", ["Sidelite Or Transom", "Sidelite/Transom"])]),
-            ("Hollow Metal Frames.csv", "HM Frames: 4 to 6 weeks", [("Elevation", ["Elevation"]), ("Fire Rating", ["Fire Rating"]), ("Location", ["Location", "Int/Ext", "Interior/Exterior", "Location (Interior/Exterior)"]), ("Gauge", ["Gauge"]), ("Face", ["Face"]), ("Jamb Profile", ["Jamb Profile"]), ("Construction", ["Construction"]), ("Return", ["Return"]), ("Anchors", ["Anchors"]), ("Sidelite", ["Sidelite"]), ("Transom Type", ["Transom Type"]), ("Transom Height", ["Transom Height"]), ("Header Continuous", ["Header Continuous", "Header Continue?"]), ("Jamb Continuous", ["Jamb Continuous", "Jamb Continue?"])]),
+            ("Hollow Metal Frames.csv", "HM Frames: 4 to 6 weeks", [("Elevation", ["Elevation"]), ("Fire Rating", ["Fire Rating"]), ("Location", ["Location", "Int/Ext", "Interior/Exterior", "Location (Interior/Exterior)"]), ("Gauge", ["Gauge"]), ("Jamb Face", ["Jamb Face"]), ("Header Face", ["Header Face"]), ("Face", ["Face"]), ("Jamb Profile", ["Jamb Profile"]), ("Construction", ["Construction"]), ("Return", ["Return"]), ("Anchors", ["Anchors"]), ("Sidelite", ["Sidelite"]), ("Sill Height", ["Sill Height"]), ("Transom Type", ["Transom Type"]), ("Transom Height", ["Transom Height"]), ("Header Continuous", ["Header Continuous", "Header Continue?"]), ("Jamb Continuous", ["Jamb Continuous", "Jamb Continue?"])]),
             ("Aluminum Frames.csv", "AL Frames: 4 to 6 weeks", [("Finish", ["Finish"]), ("2nd Finish", ["2nd Finish", "Second Finish"]), ("Sidelite", ["Sidelite"]), ("Glass Thickness", ["Glass Thickness"]), ("Wet Glaze", ["Wet Glaze"]), ("Applied Stops", ["Applied Stops"])]),
         ]
 
@@ -3104,10 +3104,13 @@ class MainWindow(QMainWindow):
             self._normalize_header_key("mat'l"): "Material",
             self._normalize_header_key("material"): "Material",
             self._normalize_header_key("face"): "Face",
+            self._normalize_header_key("jamb face"): "Jamb Face",
+            self._normalize_header_key("header face"): "Header Face",
             self._normalize_header_key("profile"): "Profile",
             self._normalize_header_key("sidelite or transom"): "Lite/Transom",
             self._normalize_header_key("jamb profile"): "Jamb Profile",
             self._normalize_header_key("sidelite"): "Sidelite",
+            self._normalize_header_key("sill height"): "Sill Height",
             self._normalize_header_key("transom type"): "Transom Type",
             self._normalize_header_key("transom height"): "Transom Height",
             self._normalize_header_key("header continuous"): "Header Continuous",
@@ -4026,15 +4029,15 @@ class MainWindow(QMainWindow):
         # Offline copy actions (context menu only — not added to toolbar)
         self.act_save_offline = QAction(QIcon.fromTheme("document-save"), "Save Offline Copy…", self)
         self.act_save_offline.setStatusTip("Save a local offline working copy of this record")
-        self.act_save_offline.triggered.connect(lambda: self._create_record_offline_copy(self.selected_path()))
+        self.act_save_offline.triggered.connect(lambda: (p := self.selected_path()) and self._create_record_offline_copy(p))
 
         self.act_return_offline = QAction(QIcon.fromTheme("document-revert"), "Return Offline Copy…", self)
         self.act_return_offline.setStatusTip("Review and apply changes from the offline copy")
-        self.act_return_offline.triggered.connect(lambda: self._return_record_offline_copy(self.selected_path()))
+        self.act_return_offline.triggered.connect(lambda: (p := self.selected_path()) and self._return_record_offline_copy(p))
 
         self.act_clear_offline_flag = QAction(QIcon.fromTheme("edit-clear"), "Clear Offline Flag…", self)
         self.act_clear_offline_flag.setStatusTip("Remove the offline checkout flag without applying changes")
-        self.act_clear_offline_flag.triggered.connect(lambda: self._clear_record_offline_flag(self.selected_path()))
+        self.act_clear_offline_flag.triggered.connect(lambda: (p := self.selected_path()) and self._clear_record_offline_flag(p))
 
         # Bid-only actions (toolbar)
         self.act_change_status = QAction(QIcon.fromTheme("emblem-important"), "Change Status…", self)
@@ -8939,7 +8942,7 @@ class MainWindow(QMainWindow):
 
                 self._project_co_markup_button = QPushButton("Set / Verify Markup")
                 self._project_co_markup_button.clicked.connect(
-                    lambda: self._set_project_change_order_markup(self._selected_parent_for_project_views())
+                    lambda: (p := self._selected_parent_for_project_views()) and self._set_project_change_order_markup(p)
                 )
                 co_markup_row.addWidget(self._project_co_markup_button)
                 co_markup_row.addStretch(1)
@@ -10296,7 +10299,7 @@ class MainWindow(QMainWindow):
                     str(file_path),
                     first_page=1,
                     last_page=1,
-                    poppler_path=get_poppler_path(),
+                    poppler_path=get_poppler_path(),  # type: ignore[arg-type]
                 )
                 if images:
                     buf = io.BytesIO()
@@ -12566,7 +12569,17 @@ class MainWindow(QMainWindow):
         if change_callback:
             change_callback()
 
-    def email_vendor_quote(self, table_headers: List[str], table_data: List[dict], table_name: str, workbook_path: Optional[Path] = None) -> None:
+    def email_vendor_quote(
+        self,
+        table_headers: List[str],
+        table_data: List[dict],
+        table_name: str,
+        workbook_path: Optional[Path] = None,
+        source_frame_table: Optional[QTableWidget] = None,
+        source_frame_headers: Optional[List[str]] = None,
+        source_door_table: Optional[QTableWidget] = None,
+        source_door_headers: Optional[List[str]] = None,
+    ) -> None:
         """
         Generate a PDF of the table filtered by vendor and email it via Outlook.
         
@@ -12638,6 +12651,119 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "PDF Error", "Failed to generate PDF. Please try again.")
                 return
             
+            # Optional: include elevations when emailing quotes.
+            attachment_pdf_path = pdf_path
+            is_frame_quote = source_frame_table is not None and source_frame_headers is not None and "frame" in table_name.lower()
+            is_door_quote = source_door_table is not None and source_door_headers is not None and "door" in table_name.lower()
+            if is_door_quote:
+                include_reply = QMessageBox.question(
+                    self,
+                    "Include Door Elevations",
+                    "Include door elevations in this quote PDF?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if include_reply == QMessageBox.StandardButton.Yes:
+                    temp_dir = Path(tempfile.gettempdir()) / "GORO_Quotes"
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    door_pdf_path = temp_dir / sanitize_name(f"Door_Elevations_{table_name}_{selected_vendor}_{ts}.pdf")
+
+                    generated_door_pdf = self.export_door_elevations_pdf(
+                        None,
+                        None,
+                        workbook_path,
+                        source_door_table=source_door_table,
+                        source_door_headers=source_door_headers,
+                        source_door_tab_name=table_name,
+                        out_path=door_pdf_path,
+                        prompt_for_path=False,
+                        show_messages=False,
+                    )
+
+                    if generated_door_pdf and generated_door_pdf.exists():
+                        if HAS_PYPDF2 and PdfMerger is not None:
+                            merged_pdf_path = temp_dir / sanitize_name(f"Quote_With_Door_Elevations_{table_name}_{selected_vendor}_{ts}.pdf")
+                            try:
+                                merger = PdfMerger()
+                                merger.append(str(pdf_path))
+                                merger.append(str(generated_door_pdf))
+                                merger.write(str(merged_pdf_path))
+                                merger.close()
+                                attachment_pdf_path = merged_pdf_path
+                            except Exception as merge_e:
+                                QMessageBox.warning(
+                                    self,
+                                    "Door Elevations",
+                                    f"Could not merge door elevations into quote PDF. Sending quote-only PDF.\n\n{merge_e}",
+                                )
+                        else:
+                            QMessageBox.warning(
+                                self,
+                                "Door Elevations",
+                                "PDF merge support is not available. Sending quote-only PDF.",
+                            )
+                    else:
+                        QMessageBox.warning(
+                            self,
+                            "Door Elevations",
+                            "Could not generate door elevations PDF. Sending quote-only PDF.",
+                        )
+            if is_frame_quote:
+                include_reply = QMessageBox.question(
+                    self,
+                    "Include Frame Elevations",
+                    "Include frame elevations in this quote PDF?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if include_reply == QMessageBox.StandardButton.Yes:
+                    temp_dir = Path(tempfile.gettempdir()) / "GORO_Quotes"
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    frame_pdf_path = temp_dir / sanitize_name(f"Frame_Elevations_{table_name}_{selected_vendor}_{ts}.pdf")
+
+                    generated_frame_pdf = self.export_frame_elevations_pdf(
+                        None,
+                        None,
+                        workbook_path,
+                        source_frame_table=source_frame_table,
+                        source_frame_headers=source_frame_headers,
+                        source_frame_tab_name=table_name,
+                        out_path=frame_pdf_path,
+                        prompt_for_path=False,
+                        show_messages=False,
+                    )
+
+                    if generated_frame_pdf and generated_frame_pdf.exists():
+                        if HAS_PYPDF2 and PdfMerger is not None:
+                            merged_pdf_path = temp_dir / sanitize_name(f"Quote_With_Frame_Elevations_{table_name}_{selected_vendor}_{ts}.pdf")
+                            try:
+                                merger = PdfMerger()
+                                merger.append(str(pdf_path))
+                                merger.append(str(generated_frame_pdf))
+                                merger.write(str(merged_pdf_path))
+                                merger.close()
+                                attachment_pdf_path = merged_pdf_path
+                            except Exception as merge_e:
+                                QMessageBox.warning(
+                                    self,
+                                    "Frame Elevations",
+                                    f"Could not merge frame elevations into quote PDF. Sending quote-only PDF.\n\n{merge_e}",
+                                )
+                        else:
+                            QMessageBox.warning(
+                                self,
+                                "Frame Elevations",
+                                "PDF merge support is not available. Sending quote-only PDF.",
+                            )
+                    else:
+                        QMessageBox.warning(
+                            self,
+                            "Frame Elevations",
+                            "Could not generate frame elevations PDF. Sending quote-only PDF.",
+                        )
+
             # Get email template from settings
             settings = QSettings(ORG_NAME, APP_NAME)
             email_body = settings.value("quote_email_template", 
@@ -12650,14 +12776,14 @@ class MainWindow(QMainWindow):
                 recipient_email=vendor_email,
                 subject=email_subject,
                 body=email_body,
-                pdf_path=pdf_path
+                pdf_path=attachment_pdf_path
             )
             
             if success:
                 QMessageBox.information(self, "Success", 
                     f"Email opened in Outlook for {selected_vendor}\n\n"
                     f"Email: {vendor_email}\n"
-                    f"PDF: {pdf_path.name}")
+                    f"PDF: {attachment_pdf_path.name}")
                 
                 # Log the quote email as a communication
                 if bid_path and isinstance(bid_path, Path) and bid_path.exists():
@@ -12666,13 +12792,13 @@ class MainWindow(QMainWindow):
                         table_name=table_name,
                         vendor_name=selected_vendor,
                         vendor_email=vendor_email,
-                        pdf_path=pdf_path,
+                        pdf_path=attachment_pdf_path,
                         email_subject=email_subject,
                         email_body=email_body,
                     )
             else:
                 QMessageBox.warning(self, "Error", 
-                    f"Could not launch Outlook. PDF saved to:\n{pdf_path}")
+                    f"Could not launch Outlook. PDF saved to:\n{attachment_pdf_path}")
         
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to email quote:\n{str(e)}")
@@ -12759,7 +12885,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "other_folders_tree"):
             return
         try:
-            self._load_other_folders(bid_path)
+            self._update_other_folders_buttons(bid_path)
         except Exception as e:
             print(f"Error refreshing folder tree: {e}")
 
@@ -12838,7 +12964,14 @@ class MainWindow(QMainWindow):
                     item = table_widget.item(row, col)
                     row_dict[header] = item.text() if item else ""
                 table_data.append(row_dict)
-            self.email_vendor_quote(headers, table_data, table_name, workbook_path)
+            self.email_vendor_quote(
+                headers,
+                table_data,
+                table_name,
+                workbook_path,
+                source_door_table=table_widget,
+                source_door_headers=headers,
+            )
 
         btn_email.clicked.connect(on_email_clicked)
 
@@ -12893,7 +13026,14 @@ class MainWindow(QMainWindow):
                     item = table_widget.item(row, col)
                     row_dict[header] = item.text() if item else ""
                 table_data.append(row_dict)
-            self.email_vendor_quote(headers, table_data, table_name, workbook_path)
+            self.email_vendor_quote(
+                headers,
+                table_data,
+                table_name,
+                workbook_path,
+                source_frame_table=table_widget,
+                source_frame_headers=headers,
+            )
 
         btn_email.clicked.connect(on_email_clicked)
 
@@ -21793,6 +21933,11 @@ class MainWindow(QMainWindow):
             btn_import_spreadsheet.clicked.connect(lambda: self.import_from_spreadsheet(tab_widget, tables_data, mark_schedule_changed, workbook_path))
             btn_row.addWidget(btn_import_spreadsheet)
 
+            btn_upgrade_format = QPushButton("Update Format")
+            btn_upgrade_format.setToolTip("Update this workbook's column layout to match the latest template (adds new columns, preserves all data)")
+            btn_upgrade_format.clicked.connect(lambda: self.upgrade_workbook_format(active_path, tab_widget, tables_data, mark_schedule_changed, dlg))
+            btn_row.addWidget(btn_upgrade_format)
+
         # Export current tab to PDF (available in all modes)
         if HAS_REPORTLAB:
             btn_export_pdf = QPushButton("Export Current Tab PDF")
@@ -22531,7 +22676,7 @@ class MainWindow(QMainWindow):
         elif "frame" in table_name_lower:
             MATCH_CANDIDATES = [
                 "Frame Type", "Open Width", "Open Height", "Height",
-                "Fire Rating", "Gauge", "Metal style", "Construction", "Face", "Finish",
+                "Fire Rating", "Gauge", "Metal style", "Construction", "Jamb Face", "Header Face", "Face", "Finish",
             ]
             type_col_name = "Frame Type"
         else:  # hardware
@@ -23231,12 +23376,14 @@ class MainWindow(QMainWindow):
                     ("Open Height", ["open height", "opening height"]),
                     ("Fire Rating", ["fire rating"]),
                     ("Gauge", ["gauge"]),
-                    ("Face", ["face"]),
+                    ("Jamb Face", ["jamb face"]),
+                    ("Header Face", ["header face"]),
                     ("Jamb Profile", ["jamb profile"]),
                     ("Construction", ["construction"]),
                     ("Return", ["return"]),
                     ("Anchors", ["anchors"]),
                     ("Sidelite", ["sidelite"]),
+                    ("Sill Height", ["sill height"]),
                     ("Transom Type", ["transom type"]),
                     ("Transom Height", ["transom height"]),
                     ("Header Continuous", ["header continuous", "header continue?"]),
@@ -23257,6 +23404,7 @@ class MainWindow(QMainWindow):
                     ("Glass Thickness", ["glass thickness"]),
                     ("Wet Glaze", ["wet glaze"]),
                     ("Applied Stops", ["applied stops"]),
+                    ("Sill Height", ["sill height"]),
                     ("Transom Type", ["transom type"]),
                     ("Transom Height", ["transom height"]),
                     ("Header Continuous", ["header continuous", "header continue?"]),
@@ -23275,6 +23423,7 @@ class MainWindow(QMainWindow):
                     ("Face", ["face"]),
                     ("Profile", ["profile"]),
                     ("Sidelite Or Transom", ["sidelite or transom", "sidelite/transom"]),
+                    ("Sill Height", ["sill height"]),
                     ("Finish", ["finish"]),
                 ],
             },
@@ -23932,6 +24081,8 @@ class MainWindow(QMainWindow):
 
         width_idx = self._find_header_idx_aliases(headers, ["Open Width", "Opening Width", "Width"])
         height_idx = self._find_header_idx_aliases(headers, ["Open Height", "Opening Height", "Height"])
+        jamb_face_idx = self._find_header_idx_aliases(headers, ["Jamb Face"])
+        header_face_idx = self._find_header_idx_aliases(headers, ["Header Face"])
         face_idx = self._find_header_idx_aliases(headers, ["Face", "Frame Face", "Trim"])
         frame_type_idx = self._find_header_idx_aliases(headers, ["Frame Type", "FrameType"])
 
@@ -23950,13 +24101,20 @@ class MainWindow(QMainWindow):
 
         open_width_text = _cell_text(width_idx)
         open_height_text = _cell_text(height_idx)
-        face_text = _cell_text(face_idx) if face_idx is not None else ""
+        jamb_face_text = (_cell_text(jamb_face_idx) if jamb_face_idx is not None else "") or (_cell_text(face_idx) if face_idx is not None else "")
+        header_face_text = (_cell_text(header_face_idx) if header_face_idx is not None else "") or (_cell_text(face_idx) if face_idx is not None else "")
         frame_type_text = _cell_text(frame_type_idx) if frame_type_idx is not None else ""
 
         open_width_in = self._parse_hm_inches(open_width_text)
         open_height_in = self._parse_hm_inches(open_height_text)
-        face_in = self._parse_hm_inches(face_text)
-        if face_in is None and frame_type_text:
+        jamb_face_in = self._parse_hm_inches(jamb_face_text)
+        header_face_in = self._parse_hm_inches(header_face_text)
+        # If one face is blank, use the other for both.
+        if jamb_face_in is None and header_face_in is not None:
+            jamb_face_in = header_face_in
+        elif header_face_in is None and jamb_face_in is not None:
+            header_face_in = jamb_face_in
+        if jamb_face_in is None and frame_type_text:
             # Fallback: parse common patterns from Frame Type text.
             face_patterns = [
                 r"face\s*[:=]?\s*([0-9]+(?:\s+[0-9]+/[0-9]+|/[0-9]+|\.[0-9]+)?)",
@@ -23966,30 +24124,33 @@ class MainWindow(QMainWindow):
                 match = re.search(pattern, frame_type_text, flags=re.IGNORECASE)
                 if not match:
                     continue
-                face_in = self._parse_hm_inches(match.group(1))
-                if face_in is not None:
+                _parsed = self._parse_hm_inches(match.group(1))
+                if _parsed is not None:
+                    jamb_face_in = _parsed
+                    header_face_in = _parsed
                     break
 
-        if open_width_in is None or open_height_in is None or face_in is None:
+        if open_width_in is None or open_height_in is None or jamb_face_in is None or header_face_in is None:
             QMessageBox.warning(
                 self,
                 "HM Frame Elevation",
-                "Unable to parse one or more values. Use formats like 3-0, 7-0, 2, or 2\". Face is read from the Face column value for that row."
+                "Unable to parse one or more values. Use formats like 3-0, 7-0, 2, or 2\". Face is read from the Jamb Face / Header Face (or Face) column value for that row."
             )
             return
 
-        outside_width_in = open_width_in + (2.0 * face_in)
-        outside_height_in = open_height_in + (2.0 * face_in)
+        outside_width_in = open_width_in + (2.0 * jamb_face_in)
+        outside_height_in = open_height_in + (2.0 * header_face_in)
 
         dlg = QDialog(self)
         dlg.setWindowTitle("HM Frame Elevation Preview")
         dlg.resize(980, 760)
 
         layout = QVBoxLayout(dlg)
+        _face_label = f"Jamb: {self._format_inches_arch(jamb_face_in)} / Hdr: {self._format_inches_arch(header_face_in)}" if jamb_face_in != header_face_in else f"Face: {self._format_inches_arch(jamb_face_in)}"
         summary = QLabel(
             "Inside: "
             f"{self._format_inches_arch(open_width_in)} x {self._format_inches_arch(open_height_in)}    "
-            f"Face: {self._format_inches_arch(face_in)}    "
+            f"{_face_label}    "
             "Outside: "
             f"{self._format_inches_arch(outside_width_in)} x {self._format_inches_arch(outside_height_in)}"
         )
@@ -24014,7 +24175,8 @@ class MainWindow(QMainWindow):
         scale = min(draw_w / outside_width_in, draw_h / outside_height_in)
         outer_w = outside_width_in * scale
         outer_h = outside_height_in * scale
-        face_px = max(2.0, face_in * scale)
+        jamb_face_px = max(2.0, jamb_face_in * scale)
+        header_face_px = max(2.0, header_face_in * scale)
 
         origin_x = (canvas_w - outer_w) / 2.0
         origin_y = top_margin
@@ -24026,7 +24188,7 @@ class MainWindow(QMainWindow):
 
         scene.addRect(QRectF(origin_x, origin_y, outer_w, outer_h), outer_pen, frame_brush)
         scene.addRect(
-            QRectF(origin_x + face_px, origin_y + face_px, outer_w - (2.0 * face_px), outer_h - (2.0 * face_px)),
+            QRectF(origin_x + jamb_face_px, origin_y + header_face_px, outer_w - (2.0 * jamb_face_px), outer_h - (2.0 * header_face_px)),
             QPen(QColor("#4a5568")),
             opening_brush,
         )
@@ -24072,21 +24234,28 @@ class MainWindow(QMainWindow):
         source_frame_table: Optional[QTableWidget] = None,
         source_frame_headers: Optional[List[str]] = None,
         source_frame_tab_name: str = "",
-    ):
+        out_path: Optional[Path] = None,
+        prompt_for_path: bool = True,
+        show_messages: bool = True,
+    ) -> Optional[Path]:
         """Generate simple frame elevation PDF sheets from frame-tab data."""
         if not HAS_REPORTLAB or canvas is None:
-            QMessageBox.warning(self, "Frame Elevations", "ReportLab is required to export frame elevations.")
-            return
+            if show_messages:
+                QMessageBox.warning(self, "Frame Elevations", "ReportLab is required to export frame elevations.")
+            return None
 
         frame_table = source_frame_table
         frame_headers = source_frame_headers
         tab_name = (source_frame_tab_name or "").strip() or "Frames"
         if frame_table is None or frame_headers is None:
-            QMessageBox.warning(self, "Frame Elevations", "No frame table was provided.")
-            return
+            if show_messages:
+                QMessageBox.warning(self, "Frame Elevations", "No frame table was provided.")
+            return None
 
         width_idx = self._find_header_idx_aliases(frame_headers, ["Open Width", "Opening Width", "Width"])
         height_idx = self._find_header_idx_aliases(frame_headers, ["Open Height", "Opening Height", "Height"])
+        jamb_face_idx = self._find_header_idx_aliases(frame_headers, ["Jamb Face"])
+        header_face_idx = self._find_header_idx_aliases(frame_headers, ["Header Face"])
         face_idx = self._find_header_idx_aliases(frame_headers, ["Face", "Frame Face", "Trim"])
         frame_type_idx = self._find_header_idx_aliases(frame_headers, ["Frame Type", "FrameType", "Type"])
         opening_idx = self._find_header_idx_aliases(frame_headers, ["Opening", "Opening #", "Opening Number"])
@@ -24112,6 +24281,10 @@ class MainWindow(QMainWindow):
             frame_headers,
             ["2nd Sidelite Height", "2nd sidelite height", "Sidelite LH Height"],
         )
+        sill_height_idx = self._find_header_idx_aliases(
+            frame_headers,
+            ["Sill Height", "Sidelite Sill Height"],
+        )
         transom_type_idx = self._find_header_idx_aliases(
             frame_headers,
             ["Transom Type", "Transom"],
@@ -24130,12 +24303,13 @@ class MainWindow(QMainWindow):
         )
 
         if width_idx is None or height_idx is None:
-            QMessageBox.warning(
-                self,
-                "Frame Elevations",
-                "Required columns were not found. Expected Open Width and Open Height."
-            )
-            return
+            if show_messages:
+                QMessageBox.warning(
+                    self,
+                    "Frame Elevations",
+                    "Required columns were not found. Expected Open Width and Open Height."
+                )
+            return None
 
         table_col_offset = 1 if frame_table.columnCount() == len(frame_headers) + 1 else 0
 
@@ -24157,6 +24331,10 @@ class MainWindow(QMainWindow):
                 return "sidelite_only"
             if text in {"none", "no", "n/a", "na"}:
                 return "none"
+            # Legacy: bare dimensional value (old "Transom width" field like "2", "2-0", "24")
+            # Treat as Full Width with that value as the height.
+            if re.match(r'^[\d]', text):
+                return "full_width"
             return "none"
 
         def _parse_boolish(raw_value: str) -> bool:
@@ -24167,7 +24345,8 @@ class MainWindow(QMainWindow):
         for r in range(frame_table.rowCount()):
             open_width_text = _cell_text(r, width_idx)
             open_height_text = _cell_text(r, height_idx)
-            face_text = _cell_text(r, face_idx)
+            jamb_face_text = _cell_text(r, jamb_face_idx) or _cell_text(r, face_idx)
+            header_face_text = _cell_text(r, header_face_idx) or _cell_text(r, face_idx)
             frame_type_text = _cell_text(r, frame_type_idx)
             opening_text = _cell_text(r, opening_idx)
             rating_text = _cell_text(r, rating_idx)
@@ -24180,6 +24359,7 @@ class MainWindow(QMainWindow):
             sidelite_left_text = _cell_text(r, sidelite_left_idx)
             sidelite_right_height_text = _cell_text(r, sidelite_right_height_idx)
             sidelite_left_height_text = _cell_text(r, sidelite_left_height_idx)
+            sill_height_text = _cell_text(r, sill_height_idx)
             transom_type_text = _cell_text(r, transom_type_idx)
             transom_height_text = _cell_text(r, transom_height_idx)
             header_continuous_text = _cell_text(r, header_continuous_idx)
@@ -24190,22 +24370,37 @@ class MainWindow(QMainWindow):
 
             open_width_in = self._parse_hm_inches(open_width_text)
             open_height_in = self._parse_hm_inches(open_height_text)
-            face_in = self._parse_hm_inches(face_text)
+            jamb_face_in = self._parse_hm_inches(jamb_face_text)
+            header_face_in = self._parse_hm_inches(header_face_text)
+            # If one face is blank, use the other for both.
+            if jamb_face_in is None and header_face_in is not None:
+                jamb_face_in = header_face_in
+            elif header_face_in is None and jamb_face_in is not None:
+                header_face_in = jamb_face_in
             sidelite_right_in = self._parse_feet_default_inches(sidelite_right_text)
             sidelite_left_in = self._parse_feet_default_inches(sidelite_left_text)
             sidelite_right_height_in = self._parse_feet_default_inches(sidelite_right_height_text)
             sidelite_left_height_in = self._parse_feet_default_inches(sidelite_left_height_text)
+            sill_height_in = float(self._parse_hm_inches(sill_height_text) or 0.0)
             transom_height_in = self._parse_feet_default_inches(transom_height_text)
             transom_type = _normalize_transom_type(transom_type_text)
             header_continuous = _parse_boolish(header_continuous_text)
             jamb_continuous = _parse_boolish(jamb_continuous_text)
+
+            # Legacy fallback: if Transom Type is a dimensional string (old "Transom width"
+            # field value like "2", "2-0", "24") and no Transom Height was given, use the
+            # Transom Type text as the height (feet-default parsing).
+            if (transom_type == "full_width"
+                    and transom_height_in <= 0.0
+                    and re.match(r'^[\d]', str(transom_type_text or "").strip())):
+                transom_height_in = self._parse_feet_default_inches(transom_type_text)
 
             if transom_type == "none" or transom_height_in <= 0.0:
                 transom_type = "none"
                 header_continuous = False
                 jamb_continuous = False
 
-            if face_in is None and frame_type_text:
+            if jamb_face_in is None and frame_type_text:
                 for pattern in (
                     r"face\s*[:=]?\s*([0-9]+(?:\s+[0-9]+/[0-9]+|/[0-9]+|\.[0-9]+)?)",
                     r"([0-9]+(?:\s+[0-9]+/[0-9]+|/[0-9]+|\.[0-9]+)?)\s*(?:\"|in|inch|inches)?\s*face",
@@ -24213,18 +24408,25 @@ class MainWindow(QMainWindow):
                     match = re.search(pattern, frame_type_text, flags=re.IGNORECASE)
                     if not match:
                         continue
-                    face_in = self._parse_hm_inches(match.group(1))
-                    if face_in is not None:
+                    _parsed = self._parse_hm_inches(match.group(1))
+                    if _parsed is not None:
+                        jamb_face_in = _parsed
+                        header_face_in = _parsed
                         break
 
             if open_width_in is None or open_height_in is None:
                 continue
 
             # If face/trim is blank, fall back to a type-appropriate default.
-            face_assumed = face_in is None
-            if face_in is None:
-                is_aluminum = "aluminum" in tab_name.lower()
-                face_in = 1.5 if is_aluminum else 2.0
+            is_aluminum = "aluminum" in tab_name.lower()
+            face_assumed = jamb_face_in is None and header_face_in is None
+            if jamb_face_in is None:
+                jamb_face_in = 1.5 if is_aluminum else 2.0
+            if header_face_in is None:
+                header_face_in = 1.5 if is_aluminum else 2.0
+
+            trim_in = float(self._parse_hm_inches(trim_text) or 0.0)
+            sill_thickness_in = sill_height_in if sill_height_in > 0.0 else (trim_in if trim_in > 0.0 else float(header_face_in))
 
             opening_spans = []
             # Default layout: 2nd sidelite on left, main opening center, sidelite on right.
@@ -24235,8 +24437,8 @@ class MainWindow(QMainWindow):
                 opening_spans.append(("right_sidelite", sidelite_right_in))
 
             total_opening_width_in = sum(span[1] for span in opening_spans)
-            outside_width_in = total_opening_width_in + (face_in * (len(opening_spans) + 1))
-            outside_height_in = open_height_in + (2.0 * face_in)
+            outside_width_in = total_opening_width_in + (jamb_face_in * (len(opening_spans) + 1))
+            outside_height_in = open_height_in + (2.0 * header_face_in)
             elevations.append(
                 {
                     "opening": opening_text,
@@ -24249,12 +24451,15 @@ class MainWindow(QMainWindow):
                         "trim": trim_text,
                         "finish": finish_text,
                         "count": count_text,
-                    "face_in": face_in,
+                    "jamb_face_in": jamb_face_in,
+                    "header_face_in": header_face_in,
                     "face_assumed": face_assumed,
                     "sidelite_right_in": sidelite_right_in,
                     "sidelite_left_in": sidelite_left_in,
                     "sidelite_right_height_in": sidelite_right_height_in,
                     "sidelite_left_height_in": sidelite_left_height_in,
+                    "sill_height_in": sill_height_in,
+                    "sill_thickness_in": sill_thickness_in,
                     "transom_type": transom_type,
                     "transom_height_in": transom_height_in,
                     "header_continuous": header_continuous,
@@ -24266,26 +24471,31 @@ class MainWindow(QMainWindow):
             )
 
         if not elevations:
-            QMessageBox.information(
+            if show_messages:
+                QMessageBox.information(
+                    self,
+                    "Frame Elevations",
+                    "No frame rows with parsable Open Width, Open Height, and Face were found."
+                )
+            return None
+
+        if prompt_for_path or out_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            default_name = f"Frame Elevations - {timestamp}.pdf"
+            start_dir = str(workbook_path) if workbook_path and Path(workbook_path).exists() else str(self.paths.root)
+            file_name, _ = QFileDialog.getSaveFileName(
                 self,
-                "Frame Elevations",
-                "No frame rows with parsable Open Width, Open Height, and Face were found."
+                "Save Frame Elevations PDF",
+                str(Path(start_dir) / default_name),
+                "PDF Files (*.pdf)",
             )
-            return
+            if not file_name:
+                return None
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        default_name = f"Frame Elevations - {timestamp}.pdf"
-        start_dir = str(workbook_path) if workbook_path and Path(workbook_path).exists() else str(self.paths.root)
-        file_name, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Frame Elevations PDF",
-            str(Path(start_dir) / default_name),
-            "PDF Files (*.pdf)",
-        )
-        if not file_name:
-            return
+            out_path = Path(file_name)
+        else:
+            out_path = Path(out_path)
 
-        out_path = Path(file_name)
         if out_path.suffix.lower() != ".pdf":
             out_path = out_path.with_suffix(".pdf")
 
@@ -24518,11 +24728,14 @@ class MainWindow(QMainWindow):
                 outside_height_in = float(data["outside_height_in"])
                 open_width_in = float(data["open_width_in"])
                 open_height_in = float(data["open_height_in"])
-                face_in = float(data["face_in"])
+                jamb_face_in = float(data["jamb_face_in"])
+                header_face_in = float(data["header_face_in"])
                 sidelite_right_in = float(data.get("sidelite_right_in", 0.0) or 0.0)
                 sidelite_left_in = float(data.get("sidelite_left_in", 0.0) or 0.0)
                 sidelite_right_height_in = float(data.get("sidelite_right_height_in", 0.0) or 0.0)
                 sidelite_left_height_in = float(data.get("sidelite_left_height_in", 0.0) or 0.0)
+                sill_height_in = float(data.get("sill_height_in", 0.0) or 0.0)
+                sill_thickness_in = float(data.get("sill_thickness_in", 0.0) or 0.0)
                 transom_type = str(data.get("transom_type") or "none")
                 transom_height_in = float(data.get("transom_height_in", 0.0) or 0.0)
                 header_continuous = bool(data.get("header_continuous"))
@@ -24536,6 +24749,9 @@ class MainWindow(QMainWindow):
                 if data.get("face_assumed"):
                     is_al = "aluminum" in tab_name.lower()
                     info_lines.append(("FACE", '1-1/2" (assumed)' if is_al else '2" (assumed)'))
+                elif jamb_face_in != header_face_in:
+                    info_lines.append(("JAMB FACE", self._format_inches_arch(jamb_face_in)))
+                    info_lines.append(("HDR FACE", self._format_inches_arch(header_face_in)))
                 if data.get("rating"):
                     info_lines.append(("RATING", str(data.get("rating"))))
                 if data.get("manufacturer"):
@@ -24558,6 +24774,8 @@ class MainWindow(QMainWindow):
                     info_lines.append(("TRANSOM H", self._format_inches_arch(transom_height_in)))
                     info_lines.append(("HDR CONT", "Yes" if header_continuous else "No"))
                     info_lines.append(("JAMB CONT", "Yes" if jamb_continuous else "No"))
+                if sill_height_in > 0.0:
+                    info_lines.append(("SILL THK", self._format_inches_arch(sill_height_in)))
 
                 info_h = 78.0
                 drawing_bottom = cell_y + info_h + 10.0
@@ -24565,7 +24783,8 @@ class MainWindow(QMainWindow):
 
                 outer_w = outside_width_in * points_per_real_inch
                 outer_h = outside_height_in * points_per_real_inch
-                face_w = max(0.9, face_in * points_per_real_inch)
+                jamb_face_w = max(0.9, jamb_face_in * points_per_real_inch)
+                header_face_w = max(0.9, header_face_in * points_per_real_inch)
 
                 draw_x = cell_x + ((cell_w - outer_w) / 2.0)
                 draw_y = drawing_bottom + 4.0
@@ -24576,11 +24795,11 @@ class MainWindow(QMainWindow):
                 pdf.setLineWidth(1.0)
                 _draw_h_dim(draw_x, right_x, top_y, top_y + 20.0, _fit_text(self._format_inches_arch(outside_width_in), "Helvetica-Bold", 9, cell_w * 0.7))
 
-                inner_left_x = draw_x + face_w
-                inner_right_x = right_x - face_w
-                inner_top_y = top_y - face_w
+                inner_left_x = draw_x + jamb_face_w
+                inner_right_x = right_x - jamb_face_w
+                inner_top_y = top_y - header_face_w
                 pts_per_in = points_per_real_inch
-                sill_y = draw_y + face_w
+                sill_y = draw_y + header_face_w
 
                 has_any_sidelite = any(kind != "main" for kind, _ in opening_spans)
                 has_transom = transom_type != "none" and transom_height_in > 0.0
@@ -24592,7 +24811,9 @@ class MainWindow(QMainWindow):
                 if transom_type == "sidelite_only" and not has_any_sidelite:
                     has_transom = False
                 transom_bottom_y = inner_top_y - transom_h_pts if has_transom else inner_top_y
-                transom_member_top_y = min(inner_top_y, transom_bottom_y + face_w) if has_transom else inner_top_y
+                transom_member_top_y = min(inner_top_y, transom_bottom_y + header_face_w) if has_transom else inner_top_y
+                main_has_transom = has_transom and (transom_type in ("full_width", "door_only"))
+                main_open_top_y = transom_bottom_y if main_has_transom else inner_top_y
 
                 pdf.setLineWidth(1.6)
                 pdf.line(draw_x, draw_y, draw_x, top_y)
@@ -24612,7 +24833,22 @@ class MainWindow(QMainWindow):
                         or (transom_type == "door_only" and span_kind == "main")
                         or (transom_type == "sidelite_only" and span_kind != "main")
                     )
-                    span_top_y = transom_bottom_y if span_has_transom else inner_top_y
+                    span_top_y = main_open_top_y
+                    span_sill_y = draw_y
+                    span_sill_bottom_y = draw_y
+                    if span_kind != "main":
+                        sill_thickness_pts = max(0.9, sill_thickness_in * pts_per_in)
+                        default_sill_bottom_y = draw_y
+                        configured_height_in = sidelite_left_height_in if span_kind == "left_sidelite" else sidelite_right_height_in
+                        if configured_height_in > 0.0:
+                            # Sidelite Height is measured from bottom of sidelite header
+                            # (span_top_y) to bottom of sill.
+                            span_sill_bottom_y = span_top_y - (configured_height_in * pts_per_in)
+                        else:
+                            span_sill_bottom_y = default_sill_bottom_y
+                        # Keep sill inside visible opening extents.
+                        span_sill_bottom_y = max(draw_y, min(span_top_y - 2.0, span_sill_bottom_y))
+                        span_sill_y = min(span_top_y - 1.0, span_sill_bottom_y + sill_thickness_pts)
                     span_layouts.append(
                         {
                             "kind": span_kind,
@@ -24621,28 +24857,39 @@ class MainWindow(QMainWindow):
                             "width_in": float(span_width_in),
                             "has_transom": span_has_transom,
                             "top_y": span_top_y,
+                            "sill_y": span_sill_y,
+                            "sill_bottom_y": span_sill_bottom_y,
                         }
                     )
                     if span_kind == "main":
                         pdf.line(left_open_x, draw_y, left_open_x, span_top_y)
                         pdf.line(right_open_x, draw_y, right_open_x, span_top_y)
                     else:
-                        pdf.line(left_open_x, sill_y, left_open_x, span_top_y)
-                        pdf.line(right_open_x, sill_y, right_open_x, span_top_y)
-                        pdf.line(left_open_x, sill_y, right_open_x, sill_y)
-                        pdf.line(left_open_x - face_w, draw_y, right_open_x + face_w, draw_y)
-                        glass_regions.append((left_open_x + 1.2, sill_y + 1.2, right_open_x - 1.2, span_top_y - 1.2))
+                        # Determine which side is the mullion (adjacent to another
+                        # opening) vs the outer jamb (adjacent to the frame perimeter).
+                        # Mullion runs full height; outer jamb only spans sill to top.
+                        is_right_sl = span_kind == "right_sidelite"
+                        mullion_x = left_open_x if is_right_sl else right_open_x
+                        outer_x = right_open_x if is_right_sl else left_open_x
+                        # Mullion jamb: full height from frame bottom to opening top.
+                        pdf.line(mullion_x, draw_y, mullion_x, span_top_y)
+                        # Outer jamb: sill bottom to opening top (only the glass area).
+                        pdf.line(outer_x, span_sill_bottom_y, outer_x, span_top_y)
+                        # Sill lines across the sidelite width.
+                        pdf.line(left_open_x, span_sill_y, right_open_x, span_sill_y)
+                        pdf.line(left_open_x, span_sill_bottom_y, right_open_x, span_sill_bottom_y)
+                        glass_regions.append((left_open_x + 1.2, span_sill_y + 1.2, right_open_x - 1.2, span_top_y - 1.2))
 
                     if span_has_transom:
                         # Always show transom jambs above the transom bar.
                         pdf.line(left_open_x, transom_member_top_y, left_open_x, inner_top_y)
                         pdf.line(right_open_x, transom_member_top_y, right_open_x, inner_top_y)
-                        # Only bridge through the transom bar when jambs are continuous.
+                        # Bridge through the transom bar when jambs are continuous.
                         if jamb_continuous:
                             pdf.line(left_open_x, transom_bottom_y, left_open_x, transom_member_top_y)
                             pdf.line(right_open_x, transom_bottom_y, right_open_x, transom_member_top_y)
 
-                    x_cursor = right_open_x + face_w
+                    x_cursor = right_open_x + jamb_face_w
                 pdf.line(inner_left_x, inner_top_y, inner_right_x, inner_top_y)
 
                 if has_transom:
@@ -24704,13 +24951,13 @@ class MainWindow(QMainWindow):
                         )
                         _draw_v_dim(
                             float(span["left_open_x"]) - 10.0 if span["kind"] == "left_sidelite" else float(span["right_open_x"]) + 10.0,
-                            sill_y,
+                            float(span.get("sill_y", draw_y)),
                             float(span["top_y"]),
                             _fit_text(
                                 self._format_inches_arch(
                                     sidelite_left_height_in if span["kind"] == "left_sidelite" and sidelite_left_height_in > 0.0
                                     else sidelite_right_height_in if span["kind"] == "right_sidelite" and sidelite_right_height_in > 0.0
-                                    else max(0.0, open_height_in - face_in)
+                                    else max(0.0, (float(span["top_y"]) - float(span.get("sill_y", draw_y))) / pts_per_in)
                                 ),
                                 "Helvetica-Bold",
                                 9,
@@ -24745,10 +24992,13 @@ class MainWindow(QMainWindow):
 
             pdf.save()
         except Exception as e:
-            QMessageBox.critical(self, "Frame Elevations", f"Failed to generate PDF:\n{e}")
-            return
+            if show_messages:
+                QMessageBox.critical(self, "Frame Elevations", f"Failed to generate PDF:\n{e}")
+            return None
 
-        QMessageBox.information(self, "Frame Elevations", f"Saved frame elevations PDF:\n{out_path}")
+        if show_messages:
+            QMessageBox.information(self, "Frame Elevations", f"Saved frame elevations PDF:\n{out_path}")
+        return out_path
 
     def export_door_elevations_pdf(
         self,
@@ -24758,6 +25008,9 @@ class MainWindow(QMainWindow):
         source_door_table: Optional[QTableWidget] = None,
         source_door_headers: Optional[List[str]] = None,
         source_door_tab_name: str = "",
+        out_path: Optional[Path] = None,
+        prompt_for_path: bool = True,
+        show_messages: bool = True,
     ):
         """Generate scaled door elevations (1/4" = 1'-0") from door tab data."""
         if not HAS_REPORTLAB or canvas is None:
@@ -25080,22 +25333,25 @@ class MainWindow(QMainWindow):
             )
 
         if not elevations:
-            QMessageBox.information(self, "Door Elevations", "No door rows found to export.")
+            if show_messages:
+                QMessageBox.information(self, "Door Elevations", "No door rows found to export.")
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        default_name = f"Door Elevations - {timestamp}.pdf"
-        start_dir = str(workbook_path) if workbook_path and Path(workbook_path).exists() else str(self.paths.root)
-        file_name, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Door Elevations PDF",
-            str(Path(start_dir) / default_name),
-            "PDF Files (*.pdf)",
-        )
-        if not file_name:
-            return
-
-        out_path = Path(file_name)
+        if prompt_for_path or out_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            default_name = f"Door Elevations - {timestamp}.pdf"
+            start_dir = str(workbook_path) if workbook_path and Path(workbook_path).exists() else str(self.paths.root)
+            file_name, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Door Elevations PDF",
+                str(Path(start_dir) / default_name),
+                "PDF Files (*.pdf)",
+            )
+            if not file_name:
+                return
+            out_path = Path(file_name)
+        else:
+            out_path = Path(out_path)
         if out_path.suffix.lower() != ".pdf":
             out_path = out_path.with_suffix(".pdf")
 
@@ -25177,9 +25433,6 @@ class MainWindow(QMainWindow):
                     draw_w *= fit_factor
                     draw_h *= fit_factor
 
-                pdf.setLineWidth(1.4)
-                pdf.rect(draw_x, draw_y, draw_w, draw_h)
-
                 active_leaf_inches = float(data.get("active_width_inches", "0") or "0")
                 inactive_leaf_inches = float(data.get("inactive_width_inches", "0") or "0")
                 total_leaf_inches = active_leaf_inches + inactive_leaf_inches
@@ -25187,8 +25440,6 @@ class MainWindow(QMainWindow):
                 if inactive_leaf_inches > 0 and total_leaf_inches > 0:
                     split_ratio = max(0.15, min(0.85, active_leaf_inches / total_leaf_inches))
                     split_x = draw_x + (draw_w * split_ratio)
-                    pdf.setLineWidth(1.0)
-                    pdf.line(split_x, draw_y, split_x, draw_y + draw_h)
 
                 # Draw lites from door-tab dimensions and offsets.
                 lite_w_in = float(data.get("lite_width_inches", "0") or "0")
@@ -25200,6 +25451,12 @@ class MainWindow(QMainWindow):
                 in_lite_h_in = float(data.get("inactive_lite_height_inches", "0") or "0")
                 in_lock_stile_in = float(data.get("inactive_lock_stile_inches", "0") or "0")
                 in_top_rail_in = float(data.get("inactive_top_rail_inches", "0") or "0")
+
+                pdf.setLineWidth(1.4)
+                pdf.rect(draw_x, draw_y, draw_w, draw_h)
+                if split_x is not None:
+                    pdf.setLineWidth(1.0)
+                    pdf.line(split_x, draw_y, split_x, draw_y + draw_h)
 
                 def _draw_arrowhead(px: float, py: float, dx: float, dy: float, size: float = 4.0) -> None:
                     vec_len = (dx * dx + dy * dy) ** 0.5
@@ -25407,13 +25664,17 @@ class MainWindow(QMainWindow):
                 _draw_panel(x, y, elev)
 
             pdf.save()
-            QMessageBox.information(
-                self,
-                "Door Elevations",
-                f"Generated {len(elevations)} elevation(s):\n{out_path}",
-            )
+            if show_messages:
+                QMessageBox.information(
+                    self,
+                    "Door Elevations",
+                    f"Generated {len(elevations)} elevation(s):\n{out_path}",
+                )
+            return out_path
         except Exception as e:
-            QMessageBox.warning(self, "Door Elevations", f"Failed to generate PDF:\n{e}")
+            if show_messages:
+                QMessageBox.warning(self, "Door Elevations", f"Failed to generate PDF:\n{e}")
+            return None
 
     def extract_door_types(self, tab_widget, tables_data, mark_changed_callback, workbook_path, post_sync_callback=None):
         """Extract unique door types from source table and populate appropriate door type tables."""
@@ -27391,7 +27652,7 @@ class MainWindow(QMainWindow):
                                         first_page=page_num,
                                         last_page=page_num,
                                         dpi=100,
-                                        poppler_path=get_poppler_path(),
+                                        poppler_path=get_poppler_path(),  # type: ignore[arg-type]
                                     )
                                     if images:
                                         image = images[0]
@@ -28073,7 +28334,7 @@ class MainWindow(QMainWindow):
                 first_page=page_num,
                 last_page=page_num,
                 dpi=150,
-                poppler_path=get_poppler_path(),
+                poppler_path=get_poppler_path(),  # type: ignore[arg-type]
             )
             if not images:
                 QMessageBox.warning(self, "OCR Error", "Could not convert PDF to image.")
@@ -30342,6 +30603,138 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(parent, "Hardware Groups Export Error", f"Could not export Hardware Groups:\n{e}")
 
         QMessageBox.information(parent, "Proposal PDF", f"PDF saved to:\n{file_path}")
+
+    def upgrade_workbook_format(
+        self,
+        workbook_path: Path,
+        tab_widget: "QTabWidget",
+        tables_data: list,
+        mark_schedule_changed,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        """Upgrade workbook CSVs to match the current template column layout.
+
+        For each CSV in the workbook that has a corresponding template in
+        ``data/WB_Template/``, the function compares headers.  When they
+        differ, existing data rows are re-mapped into the template column
+        order by case-insensitive header name matching.  New template
+        columns get blank values; old columns absent from the template are
+        preserved at the end so no user data is lost.
+        """
+        template_dir = APP_ROOT / "data" / "WB_Template"
+        if not template_dir.is_dir():
+            QMessageBox.warning(
+                parent or self,
+                "Update Workbook Format",
+                "Template directory not found.",
+            )
+            return
+
+        # Gather all template header sets keyed by filename.
+        templates: Dict[str, List[str]] = {}
+        for tp in sorted(template_dir.glob("*.csv")):
+            t_headers, _ = self._read_csv_table(tp)
+            if t_headers:
+                templates[tp.name] = t_headers
+
+        if not templates:
+            QMessageBox.warning(
+                parent or self,
+                "Update Workbook Format",
+                "No template CSVs found.",
+            )
+            return
+
+        upgraded_files: List[str] = []
+        skipped_files: List[str] = []
+
+        for entry_idx, (widget, csv_path, old_headers, quoted_col_idx) in enumerate(tables_data):
+            csv_name = csv_path.name if isinstance(csv_path, Path) else str(csv_path)
+            if csv_name not in templates:
+                continue
+
+            new_headers = templates[csv_name]
+
+            # Normalise for comparison.
+            old_norm = [h.strip().lower() for h in old_headers]
+            new_norm = [h.strip().lower() for h in new_headers]
+
+            if old_norm == new_norm:
+                skipped_files.append(csv_name)
+                continue
+
+            # Build mapping: new-column-index → old-column-index (or None).
+            old_lookup: Dict[str, int] = {}
+            for i, h in enumerate(old_norm):
+                if h and h not in old_lookup:
+                    old_lookup[h] = i
+
+            col_map: List[Optional[int]] = []
+            for nh in new_norm:
+                col_map.append(old_lookup.get(nh))
+
+            # Identify old columns NOT present in the new template (extras).
+            mapped_old_indices = {idx for idx in col_map if idx is not None}
+            extra_old: List[int] = [i for i in range(len(old_headers)) if i not in mapped_old_indices]
+
+            final_headers = list(new_headers) + [old_headers[i] for i in extra_old]
+
+            # Re-read the on-disk CSV to get raw data (preserves formulas).
+            if isinstance(csv_path, Path) and csv_path.exists():
+                _, old_data = self._read_csv_table(csv_path)
+            else:
+                old_data = []
+
+            new_data: List[List[str]] = []
+            for row in old_data:
+                new_row: List[str] = []
+                for old_idx in col_map:
+                    if old_idx is not None and old_idx < len(row):
+                        new_row.append(row[old_idx])
+                    else:
+                        new_row.append("")
+                for ei in extra_old:
+                    new_row.append(row[ei] if ei < len(row) else "")
+                new_data.append(new_row)
+
+            # Write upgraded CSV.
+            try:
+                with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(final_headers)
+                    writer.writerows(new_data)
+                upgraded_files.append(csv_name)
+            except Exception as exc:
+                QMessageBox.warning(
+                    parent or self,
+                    "Update Workbook Format",
+                    f"Failed to write {csv_name}:\n{exc}",
+                )
+
+        if not upgraded_files:
+            QMessageBox.information(
+                parent or self,
+                "Update Workbook Format",
+                "All workbook tabs already match the current template format.",
+            )
+            return
+
+        # Report results and ask to reload.
+        summary = "Updated columns for:\n  • " + "\n  • ".join(upgraded_files)
+        if skipped_files:
+            summary += "\n\nAlready up to date:\n  • " + "\n  • ".join(skipped_files)
+        summary += "\n\nThe workbook will now reload to apply the changes."
+
+        QMessageBox.information(
+            parent or self,
+            "Update Workbook Format",
+            summary,
+        )
+
+        # Close and re-open the schedule dialog to reload fresh data.
+        if isinstance(parent, QDialog):
+            parent.done(QDialog.DialogCode.Accepted)
+            QTimer.singleShot(200, lambda: self.view_schedule(workbook_path))
 
     def export_to_protech_txt(self, workbook_path: Optional[Path] = None, parent: Optional[QWidget] = None) -> None:
         """Export Schedule data to ProTech format (tab-delimited text file).
