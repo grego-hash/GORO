@@ -35,7 +35,7 @@ from core.constants import ORG_NAME, APP_NAME, APP_ID, APP_DISPLAY_NAME, DEFAULT
 from core.utils import (
     open_in_file_manager, invalid_name_reason, sanitize_name, human_bytes, dir_size,
     materialize_template, next_increment_name, parse_due_date, status_index,
-    available_copy_name, copy_template, get_system
+    available_copy_name, copy_template, get_system, clamped_size
 )
 from core.models import Paths, get_paths, ensure_dirs, list_bids, list_projects, read_info, write_info, now_iso, default_data_root
 from core.offline import (
@@ -4969,7 +4969,7 @@ class MainWindow(QMainWindow):
     def _build_bid_status_board(self) -> QWidget:
         board = QWidget()
         board.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Expanding)
-        board.setMinimumWidth(1240)
+        board.setMinimumWidth(600)
         board_layout = QHBoxLayout(board)
         board_layout.setContentsMargins(0, 0, 0, 0)
         board_layout.setSpacing(8)
@@ -5068,7 +5068,7 @@ class MainWindow(QMainWindow):
     def _build_project_status_board(self) -> QWidget:
         board = QWidget()
         board.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Expanding)
-        board.setMinimumWidth(1040)
+        board.setMinimumWidth(600)
         board_layout = QHBoxLayout(board)
         board_layout.setContentsMargins(0, 0, 0, 0)
         board_layout.setSpacing(8)
@@ -6826,7 +6826,7 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Tasks")
-        dlg.setMinimumSize(780, 440)
+        dlg.setMinimumSize(*clamped_size(780, 440))
         layout = QVBoxLayout(dlg)
 
         task_list = QListWidget()
@@ -8519,7 +8519,13 @@ class MainWindow(QMainWindow):
             self._details_popup_window.setWindowTitle(self._details_popup_title())
         
         if not self._details_popup_window.isVisible():
-            self._details_popup_window.showMaximized()
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                avail = screen.availableGeometry()
+                self._details_popup_window.setGeometry(avail)
+                self._details_popup_window.show()
+            else:
+                self._details_popup_window.showMaximized()
         self._details_popup_window.raise_()
         self._details_popup_window.activateWindow()
 
@@ -9340,7 +9346,7 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Project Change Orders")
-        dlg.resize(1400, 860)
+        dlg.resize(*clamped_size(1400, 860))
 
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -10891,8 +10897,8 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Import Workbook")
-        dlg.setMinimumWidth(760)
-        dlg.setMinimumHeight(500)
+        dlg.setMinimumWidth(min(760, clamped_size(760, 500)[0]))
+        dlg.setMinimumHeight(min(500, clamped_size(760, 500)[1]))
 
         layout = QVBoxLayout(dlg)
         search_label = QLabel("Search bids/projects (partial match):")
@@ -21507,7 +21513,7 @@ class MainWindow(QMainWindow):
             # Create dialog
             view_dlg = QDialog(dlg)
             view_dlg.setWindowTitle("Edit View - Show/Hide Columns")
-            view_dlg.resize(400, 500)
+            view_dlg.resize(*clamped_size(400, 500))
             
             layout = QVBoxLayout(view_dlg)
             layout.addWidget(QLabel("Select which columns to display:"))
@@ -21987,6 +21993,34 @@ class MainWindow(QMainWindow):
             btn_export_pdf = QPushButton("Export Current Tab PDF")
             btn_export_pdf.clicked.connect(_export_current_tab_pdf)
             btn_row.addWidget(btn_export_pdf)
+
+        # Fab Sheets button (available when schedule + hardware data present)
+        if schedule_data and hardware_all_data and hardware_groups_data:
+            btn_fab_sheets = QPushButton("Fab Sheets")
+            btn_fab_sheets.setToolTip("Generate door fabrication sheets grouped by Door Type + Prep Code")
+            def _open_fab_sheets(*, _sd=schedule_data, _ha=hardware_all_data, _hg=hardware_groups_data, _ap=active_path):
+                from ui.fab_sheet_builder import build_fab_sheets, _enrich_from_door_tables
+                from ui.fab_sheet_dialog import FabSheetDialog
+                sheets = build_fab_sheets(_sd[0], _sd[1], _ha[0], _ha[1], _hg[0], _hg[1])
+                if _ap:
+                    _enrich_from_door_tables(sheets, _ap.parent if _ap.suffix else _ap)
+                if not sheets:
+                    QtMessageBox.information(dlg, "Fab Sheets", "No fab sheets to display.\nCheck that Schedule has openings with Door Type and Hardware Group assigned.")
+                    return
+                job_name = ""
+                if _ap:
+                    wp = _ap.parent if _ap.suffix else _ap
+                    # Path pattern: .../<Job Name>/4.Workbooks/<Workbook Name>
+                    if wp.parent and wp.parent.name.lower() == "4.workbooks" and wp.parent.parent:
+                        job_name = wp.parent.parent.name
+                    elif wp.parent:
+                        job_name = wp.parent.name
+                    else:
+                        job_name = wp.name
+                fd = FabSheetDialog(sheets, job_name=job_name, workbook_path=_ap, parent=dlg)
+                fd.exec()
+            btn_fab_sheets.clicked.connect(_open_fab_sheets)
+            btn_row.addWidget(btn_fab_sheets)
 
         # Export to ProTech (available in all modes)
         btn_export_protech = QPushButton("Export to ProTech")
@@ -22468,7 +22502,7 @@ class MainWindow(QMainWindow):
         btn_close.clicked.connect(dlg.accept)
         btn_row.addWidget(btn_close)
         layout.addLayout(btn_row)
-        dlg.resize(1000, 600)
+        dlg.resize(*clamped_size(1000, 600))
         
         # Add Ctrl+Z undo shortcut
         undo_action = QAction("Undo", dlg)
@@ -22826,7 +22860,7 @@ class MainWindow(QMainWindow):
         tc = self.theme_colors
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Search Quoted Material Costs \u2014 {table_name}")
-        dlg.resize(960, 640)
+        dlg.resize(*clamped_size(960, 640))
         dlg.setStyleSheet(f"background-color:{tc['window_bg']}; color:{tc['text_primary']};")
 
         layout = QVBoxLayout(dlg)
@@ -23498,7 +23532,7 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Quoted Pricing Lookup")
-        dlg.resize(1020, 700)
+        dlg.resize(*clamped_size(1020, 700))
         dlg.setStyleSheet(f"background-color:{tc['window_bg']}; color:{tc['text_primary']};")
 
         layout = QVBoxLayout(dlg)
@@ -24195,7 +24229,7 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("HM Frame Elevation Preview")
-        dlg.resize(980, 760)
+        dlg.resize(*clamped_size(980, 760))
 
         layout = QVBoxLayout(dlg)
         _face_label = f"Jamb: {self._format_inches_arch(jamb_face_in)} / Hdr: {self._format_inches_arch(header_face_in)}" if jamb_face_in != header_face_in else f"Face: {self._format_inches_arch(jamb_face_in)}"
@@ -24561,16 +24595,19 @@ class MainWindow(QMainWindow):
             cell_gap_y = 18.0
             points_per_real_inch = 72.0 / 48.0  # Fixed 1/4" = 1'-0" — never scaled per frame.
             wp = Path(workbook_path) if workbook_path else None
-            job_name = wp.name if wp and wp.exists() else ""
-            # Path: .../Bids/ProjectName/4.Workbooks/WorkbookFolder/
-            # Two levels up from the workbook gives the bid/project folder name.
-            _wp_pp = wp.parent.parent if (wp and wp.parent and wp.parent.parent) else None
-            if _wp_pp and _wp_pp.exists() and _wp_pp.name:
-                project_name = _wp_pp.name
-            elif wp and wp.exists():
-                project_name = wp.name
+            job_name = ""
+            if wp and wp.exists():
+                work_root = wp.parent if wp.suffix else wp
+                # Path pattern: .../<Job Name>/4.Workbooks/<Workbook Name>
+                if work_root.parent and work_root.parent.name.lower() == "4.workbooks" and work_root.parent.parent:
+                    project_name = work_root.parent.parent.name
+                elif work_root.parent:
+                    project_name = work_root.parent.name
+                else:
+                    project_name = work_root.name
+                job_name = project_name
             else:
-                project_name = job_name
+                project_name = ""
 
             # --- Per-page variable grid at fixed 1/4" scale ----------------------
             _area_w = page_w - 2.0 * sheet_margin
@@ -25589,7 +25626,9 @@ class MainWindow(QMainWindow):
                     # Line runs full height of lite, centered on cx.
                     # Label sits at mid-height, offset slightly right so it clears the line.
                     pdf.setLineWidth(0.7)
+                    pdf.setDash(2, 2)
                     pdf.line(cx, lite_y + inner_margin, cx, lite_y + lite_h_pts - inner_margin)
+                    pdf.setDash()
                     _draw_arrowhead(cx, lite_y + inner_margin, 0.0, -1.0, 3.5)
                     _draw_arrowhead(cx, lite_y + lite_h_pts - inner_margin, 0.0, 1.0, 3.5)
                     # Height label rotated, sitting just right of the vertical line.
@@ -25605,20 +25644,23 @@ class MainWindow(QMainWindow):
                     pdf.restoreState()
 
                     # --- Horizontal (width) dimension line — just below the lite ---
-                    horiz_y = max(lite_y - 5.0, draw_y + 2.0)
+                    horiz_y = max(lite_y - 7.0, draw_y + 2.0)
+                    ext_gap = 1.5
                     pdf.setLineWidth(0.7)
-                    pdf.line(lite_x, lite_y, lite_x, horiz_y)
-                    pdf.line(lite_x + lite_w_pts, lite_y, lite_x + lite_w_pts, horiz_y)
+                    pdf.setDash(2, 2)
+                    pdf.line(lite_x, lite_y - ext_gap, lite_x, horiz_y)
+                    pdf.line(lite_x + lite_w_pts, lite_y - ext_gap, lite_x + lite_w_pts, horiz_y)
                     pdf.line(lite_x, horiz_y, lite_x + lite_w_pts, horiz_y)
+                    pdf.setDash()
                     _draw_arrowhead(lite_x, horiz_y, 1.0, 0.0, 3.5)
                     _draw_arrowhead(lite_x + lite_w_pts, horiz_y, -1.0, 0.0, 3.5)
                     pdf.setFont("Helvetica", dim_font)
                     w_lbl_w = pdf.stringWidth(lite_width_label, "Helvetica", dim_font)
                     pdf.saveState()
                     pdf.setFillColorRGB(1, 1, 1)
-                    pdf.rect(cx - (w_lbl_w / 2.0) - 1.5, horiz_y + 1.5, w_lbl_w + 3.0, dim_font + 1.0, stroke=0, fill=1)
+                    pdf.rect(cx - (w_lbl_w / 2.0) - 1.5, horiz_y - (dim_font + 1.5), w_lbl_w + 3.0, dim_font + 1.0, stroke=0, fill=1)
                     pdf.setFillColorRGB(0, 0, 0)
-                    pdf.drawCentredString(cx, horiz_y + 2.0, lite_width_label)
+                    pdf.drawCentredString(cx, horiz_y - dim_font - 1.0, lite_width_label)
                     pdf.restoreState()
 
                 if split_x is None:
@@ -25658,15 +25700,20 @@ class MainWindow(QMainWindow):
                 leaf_dim_y = draw_y - 12
                 pdf.setFont("Helvetica", 8)
                 if split_x is not None:
-                    pdf.line(draw_x, draw_y, draw_x, leaf_dim_y)
-                    pdf.line(split_x, draw_y, split_x, leaf_dim_y)
-                    pdf.line(draw_x + draw_w, draw_y, draw_x + draw_w, leaf_dim_y)
+                    ext_gap = 1.8
+                    pdf.setDash(2, 2)
+                    pdf.line(draw_x, draw_y - ext_gap, draw_x, leaf_dim_y)
+                    pdf.line(split_x, draw_y - ext_gap, split_x, leaf_dim_y)
+                    pdf.line(draw_x + draw_w, draw_y - ext_gap, draw_x + draw_w, leaf_dim_y)
 
                     pdf.line(draw_x, leaf_dim_y, split_x, leaf_dim_y)
+                    pdf.setDash()
                     _draw_arrowhead(draw_x, leaf_dim_y, 1.0, 0.0, 3.5)
                     _draw_arrowhead(split_x, leaf_dim_y, -1.0, 0.0, 3.5)
 
+                    pdf.setDash(2, 2)
                     pdf.line(split_x, leaf_dim_y, draw_x + draw_w, leaf_dim_y)
+                    pdf.setDash()
                     _draw_arrowhead(split_x, leaf_dim_y, 1.0, 0.0, 3.5)
                     _draw_arrowhead(draw_x + draw_w, leaf_dim_y, -1.0, 0.0, 3.5)
 
@@ -25676,9 +25723,12 @@ class MainWindow(QMainWindow):
                     pdf.drawCentredString(draw_x + ((split_x - draw_x) / 2.0), leaf_label_y, active_label)
                     pdf.drawCentredString(split_x + ((draw_x + draw_w - split_x) / 2.0), leaf_label_y, inactive_label)
                 else:
-                    pdf.line(draw_x, draw_y, draw_x, leaf_dim_y)
-                    pdf.line(draw_x + draw_w, draw_y, draw_x + draw_w, leaf_dim_y)
+                    ext_gap = 1.8
+                    pdf.setDash(2, 2)
+                    pdf.line(draw_x, draw_y - ext_gap, draw_x, leaf_dim_y)
+                    pdf.line(draw_x + draw_w, draw_y - ext_gap, draw_x + draw_w, leaf_dim_y)
                     pdf.line(draw_x, leaf_dim_y, draw_x + draw_w, leaf_dim_y)
+                    pdf.setDash()
                     _draw_arrowhead(draw_x, leaf_dim_y, 1.0, 0.0, 3.5)
                     _draw_arrowhead(draw_x + draw_w, leaf_dim_y, -1.0, 0.0, 3.5)
                     active_label = data.get("active_width", data.get("width", "-"))
@@ -25687,9 +25737,12 @@ class MainWindow(QMainWindow):
 
                 # Height dimension (right) with inward arrowheads.
                 dim_right_x = draw_x + draw_w + 20
-                pdf.line(draw_x + draw_w, draw_y, dim_right_x, draw_y)
-                pdf.line(draw_x + draw_w, draw_y + draw_h, dim_right_x, draw_y + draw_h)
+                ext_gap = 1.8
+                pdf.setDash(2, 2)
+                pdf.line(draw_x + draw_w + ext_gap, draw_y, dim_right_x, draw_y)
+                pdf.line(draw_x + draw_w + ext_gap, draw_y + draw_h, dim_right_x, draw_y + draw_h)
                 pdf.line(dim_right_x, draw_y, dim_right_x, draw_y + draw_h)
+                pdf.setDash()
                 _draw_arrowhead(dim_right_x, draw_y, 0.0, 1.0)
                 _draw_arrowhead(dim_right_x, draw_y + draw_h, 0.0, -1.0)
 
@@ -27713,16 +27766,14 @@ class MainWindow(QMainWindow):
                                         pixmap = self._pil_to_qpixmap(image)
                                         
                                         # Don't scale down too aggressively - keep at least 1200px width for visibility
-                                        max_width = 1400
-                                        max_height = 1000
+                                        max_width, max_height = clamped_size(1400, 1000, margin=80)
                                         if pixmap.width() > max_width or pixmap.height() > max_height:
                                             pixmap = pixmap.scaled(max_width, max_height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                                         
                                         # Show selection dialog
                                         dlg = QDialog(self)
                                         dlg.setWindowTitle("Select Table")
-                                        dlg.resize(1400, 1000)
-                                        
+                                        dlg.resize(*clamped_size(1400, 1000))
                                         layout = QVBoxLayout(dlg)
                                         label = QLabel(f"Click on the table you want to import ({len(tables)} tables found):")
                                         layout.addWidget(label)
@@ -28285,7 +28336,7 @@ class MainWindow(QMainWindow):
         # Create dialog
         dlg = QDialog(self)
         dlg.setWindowTitle("Select Page")
-        dlg.resize(1000, 700)
+        dlg.resize(*clamped_size(1000, 700))
         
         layout = QVBoxLayout(dlg)
         label = QLabel(f"Select the page containing the table you want to import ({num_pages} pages):")
@@ -28397,7 +28448,7 @@ class MainWindow(QMainWindow):
             # Show image and let user select region
             dlg = QDialog(self)
             dlg.setWindowTitle(f"Select Table Region - Page {page_num}")
-            dlg.resize(900, 700)
+            dlg.resize(*clamped_size(900, 700))
             
             layout = QVBoxLayout(dlg)
             label = QLabel(f"Draw a rectangle around the table you want to import from page {page_num}:")
@@ -28408,8 +28459,9 @@ class MainWindow(QMainWindow):
             pixmap = original_pixmap
 
             # Scale pixmap if too large (keep track of scale for coordinate mapping)
-            if pixmap.width() > 850 or pixmap.height() > 600:
-                pixmap = pixmap.scaled(850, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            _img_w, _img_h = clamped_size(850, 600, margin=120)
+            if pixmap.width() > _img_w or pixmap.height() > _img_h:
+                pixmap = pixmap.scaled(_img_w, _img_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             
             # Create selection widget
             selector = ImageRegionSelection(pixmap)
@@ -28514,7 +28566,7 @@ class MainWindow(QMainWindow):
         # Create mapping dialog
         dlg = QDialog(self)
         dlg.setWindowTitle("Map Columns")
-        dlg.resize(700, 600)
+        dlg.resize(*clamped_size(700, 600))
         
         layout = QVBoxLayout(dlg)
         label = QLabel(f"Map {source_label} columns to Schedule columns:")
@@ -29927,7 +29979,7 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Door Plan Elevations")
-        dlg.resize(600, 500)
+        dlg.resize(*clamped_size(600, 500))
 
         layout = QVBoxLayout(dlg)
 

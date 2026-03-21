@@ -9,9 +9,23 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core.constants import BID_STATUSES
+
+
+# ----------------------------
+# Screen-aware sizing
+# ----------------------------
+
+def clamped_size(w: int, h: int, margin: int = 40) -> tuple[int, int]:
+    """Return (width, height) clamped to the available screen geometry minus *margin*."""
+    screen = QApplication.primaryScreen()
+    if screen is not None:
+        avail = screen.availableGeometry()
+        w = min(w, avail.width() - margin)
+        h = min(h, avail.height() - margin)
+    return w, h
 
 
 # ----------------------------

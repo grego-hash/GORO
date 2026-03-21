@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
 
 from .main_window_ui_helpers import QMessageBox
 
+from core.utils import clamped_size
+
 
 class SendToAlternateDialog(QDialog):
     """Dialog for sending selected schedule openings to an alternate."""
@@ -174,7 +176,7 @@ class VendorsDialog(QDialog):
             raise ValueError("vendors_widget_cls is required")
 
         self.setWindowTitle("Vendors Management")
-        self.setMinimumSize(800, 400)
+        self.setMinimumSize(*clamped_size(800, 400))
 
         self.vendors_widget = vendors_widget_cls(self, data_path=data_path)
 
@@ -240,7 +242,7 @@ class CustomerDialog(QDialog):
             raise ValueError("customer_widget_cls is required")
 
         self.setWindowTitle("Customers Management")
-        self.setMinimumSize(900, 500)
+        self.setMinimumSize(*clamped_size(900, 500))
 
         self.customer_widget = customer_widget_cls(self, data_path=data_path)
 
@@ -333,7 +335,7 @@ class MyCompanyDialog(QDialog):
             raise ValueError("company_widget_cls is required")
 
         self.setWindowTitle("My Company")
-        self.setMinimumSize(900, 650)
+        self.setMinimumSize(*clamped_size(900, 650))
 
         self.company_widget = company_widget_cls(self, data_path=data_path)
 

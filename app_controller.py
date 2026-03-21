@@ -28,6 +28,7 @@ class GOROApp:
         self.home_screen.navigate_to_my_company.connect(self.show_my_company)
         self.home_screen.navigate_to_preferences.connect(self.show_preferences)
         self.home_screen.navigate_to_quoted_lookup.connect(self.show_quoted_lookup)
+        self.home_screen.navigate_to_fabrication.connect(self.show_fabrication)
         self.stacked_widget.addWidget(self.home_screen)
 
         settings = QSettings(ORG_NAME, APP_NAME)
@@ -178,6 +179,12 @@ class GOROApp:
         window = self._show_main_window()
         if hasattr(window, "open_quoted_lookup_from_home"):
             window.open_quoted_lookup_from_home()
+
+    def show_fabrication(self):
+        """Open fabrication hub dialog."""
+        from ui.fabrication_hub import FabricationHubDialog
+        dlg = FabricationHubDialog(parent=self.stacked_widget)
+        dlg.exec()
 
     def _maybe_show_first_install_tutorial(self):
         """Show the first-install setup tutorial once per user profile."""

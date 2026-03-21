@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
+from core.utils import clamped_size
+
 from core.milestones import (
     Milestone, list_milestones, create_milestone, delete_milestone,
     revert_to_milestone, copy_milestone_to_new_workbook, compare_workbooks
@@ -66,7 +68,7 @@ class MilestoneCompareDialog(QDialog):
     def __init__(self, changes: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Workbook Comparison")
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(*clamped_size(900, 700))
         
         layout = QVBoxLayout(self)
         
@@ -221,7 +223,7 @@ class ManageMilestonesDialog(QDialog):
         self.workbook_name = workbook_name
         self._view_schedule_callback = view_schedule_callback
         self.setWindowTitle(f"Manage Milestones - {workbook_name}")
-        self.setMinimumSize(700, 500)
+        self.setMinimumSize(*clamped_size(700, 500))
         
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"<b>Milestones for {workbook_name}:</b>"))

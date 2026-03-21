@@ -34,7 +34,8 @@ class HomeScreen(QWidget):
     navigate_to_my_company = pyqtSignal()
     navigate_to_preferences = pyqtSignal()
     navigate_to_quoted_lookup = pyqtSignal()
-    
+    navigate_to_fabrication = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         # Allow home screen to resize freely
@@ -418,6 +419,9 @@ class HomeScreen(QWidget):
         self.btn_quoted_lookup = self._create_action_card(
             "Quoted Lookup", "Find quoted door, frame, and hardware pricing matches.", self.navigate_to_quoted_lookup.emit, False
         )
+        self.btn_fabrication = self._create_action_card(
+            "Fabrication", "Manage prep codes, templates, and fabrication tools.", self.navigate_to_fabrication.emit, False
+        )
 
         self._action_cards = [
             self.btn_bids,
@@ -428,6 +432,7 @@ class HomeScreen(QWidget):
             self.btn_my_company,
             self.btn_preferences,
             self.btn_quoted_lookup,
+            self.btn_fabrication,
         ]
 
         self._menu_buttons = [
@@ -439,6 +444,7 @@ class HomeScreen(QWidget):
             self.btn_my_company,
             self.btn_preferences,
             self.btn_quoted_lookup,
+            self.btn_fabrication,
         ]
 
         self._update_home_mode_buttons()

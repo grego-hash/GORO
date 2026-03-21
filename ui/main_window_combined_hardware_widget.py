@@ -244,6 +244,9 @@ class CombinedHardwareWidget(QWidget):
 
         # Group status row
         group_status_layout = QHBoxLayout()
+        self.prep_string_label = QLabel("Prep: —")
+        self.prep_string_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        group_status_layout.addWidget(self.prep_string_label)
         group_status_layout.addStretch()
         self.completed_checkbox = QCheckBox("Completed")
         self.completed_checkbox.stateChanged.connect(self.on_group_completed_changed)
@@ -252,8 +255,8 @@ class CombinedHardwareWidget(QWidget):
         
         # Hardware parts table for selected group
         self.parts_table = NoRowHeaderTable()
-        self.parts_table.setColumnCount(6)
-        self.parts_table.setHorizontalHeaderLabels(["Select", "Hardware Part", "MFR", "Finish", "Category", "COUNT"])
+        self.parts_table.setColumnCount(7)
+        self.parts_table.setHorizontalHeaderLabels(["Select", "Hardware Part", "MFR", "Finish", "Category", "Prep Code", "COUNT"])
         parts_header = self.parts_table.horizontalHeader()
         assert parts_header is not None
         parts_header.setStretchLastSection(False)
@@ -262,9 +265,10 @@ class CombinedHardwareWidget(QWidget):
         parts_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         parts_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         parts_header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        parts_header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        parts_header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        parts_header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.parts_table.setColumnWidth(0, 60)
-        self.parts_table.setColumnWidth(5, 80)
+        self.parts_table.setColumnWidth(6, 80)
         
         self.parts_table.setStyleSheet("""
             QTableWidget {
@@ -542,7 +546,46 @@ class CombinedHardwareWidget(QWidget):
                 return row_values
 
         return {}
-    
+
+    def get_group_prep_string(self, group_name: str) -> str:
+        """Return the canonical prep string for a hardware group.
+
+        Collects every non-blank Prep Code from the parts assigned to the group,
+        de-duplicates them, sorts alphabetically, and joins with '+'.
+        E.g. parts with codes 'LP', 'CL', 'LP' → 'CL+LP'
+        """
+        group_idx = self._get_header_index(self.hardware_groups_headers, "Hardware Group")
+        if group_idx is None:
+            group_idx = 0
+        part_id_idx = self._get_header_index(self.hardware_groups_headers, "Part ID")
+        if part_id_idx is None:
+            return ""
+
+        codes: set[str] = set()
+        for row in self.hardware_groups_rows:
+            row_group = row[group_idx].strip() if len(row) > group_idx else ""
+            if row_group != group_name:
+                continue
+            part_id = row[part_id_idx].strip() if len(row) > part_id_idx else ""
+            if not part_id:
+                continue
+            hw_row = self._get_hardware_row_by_part_id(part_id)
+            code = hw_row.get("prep code", "").strip()
+            if code:
+                codes.add(code)
+
+        return "+".join(sorted(codes))
+
+    def _refresh_prep_string_label(self):
+        """Update the prep string label for the currently selected group."""
+        if not hasattr(self, "prep_string_label") or self.prep_string_label is None:
+            return
+        if not self.current_group:
+            self.prep_string_label.setText("Prep: \u2014")
+            return
+        s = self.get_group_prep_string(self.current_group)
+        self.prep_string_label.setText(f"Prep: {s}" if s else "Prep: \u2014")
+
     def load_hardware_table(self):
         """Load all hardware parts into the left table with checkboxes."""
         try:
@@ -740,6 +783,22 @@ class CombinedHardwareWidget(QWidget):
             if categories:
                 delegate = ComboBoxDelegate(categories, self.hardware_table, editable=True)
                 self.hardware_table.setItemDelegateForColumn(category_col_idx + 1, delegate)
+
+        # Set up category-aware Prep Code dropdown delegate
+        prep_code_col_idx = None
+        for idx, header in enumerate(self.hardware_all_headers):
+            if header.strip().lower() == "prep code":
+                prep_code_col_idx = idx
+                break
+
+        if prep_code_col_idx is not None:
+            from core.prep_codes import PrepCodeDB
+            from core.prep_code_delegate import PrepCodeDelegate
+            prep_db = PrepCodeDB.load_default()
+            cat_col_in_table = (category_col_idx + 1) if category_col_idx is not None else -1
+            if cat_col_in_table > 0:
+                prep_delegate = PrepCodeDelegate(prep_db, cat_col_in_table, self.hardware_table)
+                self.hardware_table.setItemDelegateForColumn(prep_code_col_idx + 1, prep_delegate)
 
         self.hardware_table.setSortingEnabled(True)
         self.apply_hardware_filter()
@@ -1791,12 +1850,14 @@ class CombinedHardwareWidget(QWidget):
                 mfr = hw_row.get("mfr", "")
                 finish = hw_row.get("finish", "")
                 category = hw_row.get("category", "")
+                prep_code = hw_row.get("prep code", "")
             else:
                 mfr = ""
                 finish = ""
                 category = ""
+                prep_code = ""
 
-            for col_idx, value in ((2, mfr), (3, finish), (4, category)):
+            for col_idx, value in ((2, mfr), (3, finish), (4, category), (5, prep_code)):
                 cell_item = self.parts_table.item(row_idx, col_idx)
                 if cell_item is None:
                     cell_item = QTableWidgetItem("")
@@ -1805,6 +1866,7 @@ class CombinedHardwareWidget(QWidget):
                 cell_item.setText(value)
 
         self.parts_table.blockSignals(False)
+        self._refresh_prep_string_label()
     
     def recalculate_all_parts_in_current_group(self):
         """No longer used - cost and labor removed from Hardware Groups."""
@@ -1925,11 +1987,13 @@ class CombinedHardwareWidget(QWidget):
             mfr = ""
             finish = ""
             category = ""
+            prep_code = ""
             if part_id:
                 hw_row = self._get_hardware_row_by_part_id(part_id)
                 mfr = hw_row.get("mfr", "")
                 finish = hw_row.get("finish", "")
                 category = hw_row.get("category", "")
+                prep_code = hw_row.get("prep code", "")
             
             # MFR (read-only)
             mfr_item = QTableWidgetItem(mfr)
@@ -1946,9 +2010,14 @@ class CombinedHardwareWidget(QWidget):
             category_item.setFlags(category_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.parts_table.setItem(row_idx, 4, category_item)
             
+            # Prep Code (read-only — edit via hardware table)
+            prep_code_item = QTableWidgetItem(prep_code)
+            prep_code_item.setFlags(prep_code_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.parts_table.setItem(row_idx, 5, prep_code_item)
+            
             # COUNT (default 1, editable)
             count_item = QTableWidgetItem("1")
-            self.parts_table.setItem(row_idx, 5, count_item)
+            self.parts_table.setItem(row_idx, 6, count_item)
         
         self.parts_table.blockSignals(False)
         
@@ -2323,15 +2392,17 @@ class CombinedHardwareWidget(QWidget):
                         part_item.setData(Qt.ItemDataRole.UserRole, part_id)
                     self.parts_table.setItem(row_idx, 1, part_item)
                     
-                    # Get MFR, Finish, Category from Hardware table by Part ID
+                    # Get MFR, Finish, Category, Prep Code from Hardware table by Part ID
                     mfr = ""
                     finish = ""
                     category = ""
+                    prep_code = ""
                     if part_id:
                         hw_row = self._get_hardware_row_by_part_id(part_id)
                         mfr = hw_row.get("mfr", "")
                         finish = hw_row.get("finish", "")
                         category = hw_row.get("category", "")
+                        prep_code = hw_row.get("prep code", "")
                     
                     # MFR (read-only)
                     mfr_item = QTableWidgetItem(mfr)
@@ -2348,11 +2419,17 @@ class CombinedHardwareWidget(QWidget):
                     category_item.setFlags(category_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     self.parts_table.setItem(row_idx, 4, category_item)
                     
+                    # Prep Code (read-only — edit via hardware table)
+                    prep_code_item = QTableWidgetItem(prep_code)
+                    prep_code_item.setFlags(prep_code_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self.parts_table.setItem(row_idx, 5, prep_code_item)
+                    
                     # COUNT (editable)
                     count_item = QTableWidgetItem(count)
-                    self.parts_table.setItem(row_idx, 5, count_item)
+                    self.parts_table.setItem(row_idx, 6, count_item)
         
         self.parts_table.blockSignals(False)
+        self._refresh_prep_string_label()
 
     def _get_group_completed_map(self):
         completed_idx = self._get_header_index(self.hardware_groups_headers, "Completed")
@@ -2758,7 +2835,7 @@ class CombinedHardwareWidget(QWidget):
             for row_idx in range(self.parts_table.rowCount()):
                 # Skip column 0 (checkbox), read from columns 1-5
                 part_item = self.parts_table.item(row_idx, 1)  # Column 1 is Hardware Part
-                count_item = self.parts_table.item(row_idx, 5)  # Column 5 is COUNT
+                count_item = self.parts_table.item(row_idx, 6)  # Column 6 is COUNT
                 
                 part_name = part_item.text().strip() if part_item else ""
                 count = count_item.text().strip() if count_item else ""
