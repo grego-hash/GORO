@@ -196,7 +196,34 @@ class LaborSettingsDialog(QDialog):
         layout.addLayout(btns)
 
     def _save_and_accept(self):
-        self.accept()
+        try:
+            # Door labor settings
+            self.settings.setValue("labor_doors_single_hours", float(self.door_single_hours_edit.text()))
+            self.settings.setValue("labor_doors_single_load", float(self.door_single_load_edit.text()))
+            self.settings.setValue("labor_doors_pair_hours", float(self.door_pair_hours_edit.text()))
+            self.settings.setValue("labor_doors_pair_load", float(self.door_pair_load_edit.text()))
+            
+            # HM labor settings
+            self.settings.setValue("labor_hm_kd_hours", float(self.hm_kd_hours_edit.text()))
+            self.settings.setValue("labor_hm_kd_load", float(self.hm_kd_load_edit.text()))
+            self.settings.setValue("labor_hm_welded_hours", float(self.hm_welded_hours_edit.text()))
+            self.settings.setValue("labor_hm_welded_load", float(self.hm_welded_load_edit.text()))
+            self.settings.setValue("labor_hm_sidelite_per_foot", float(self.hm_sidelite_add_edit.text()))
+            
+            # Aluminum labor settings
+            self.settings.setValue("labor_alum_width_threshold", float(self.alum_width_threshold_edit.text()))
+            self.settings.setValue("labor_alum_under_hours", float(self.alum_under_hours_edit.text()))
+            self.settings.setValue("labor_alum_over_hours", float(self.alum_over_hours_edit.text()))
+            self.settings.setValue("labor_alum_load", float(self.alum_load_edit.text()))
+            self.settings.setValue("labor_alum_sidelite_per_foot", float(self.alum_sidelite_add_edit.text()))
+            
+            # Hardware hours mapping
+            self.settings.setValue("labor_hw_map", self.hw_map_edit.toPlainText())
+            
+            self.accept()
+        except ValueError:
+            # Handle invalid numeric input
+            QMessageBox.warning(self, "Invalid Input", "Please check that all numeric fields contain valid numbers.")
 
 class CreateBidDialog(QDialog):
     def __init__(
