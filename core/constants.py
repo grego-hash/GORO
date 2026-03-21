@@ -8,7 +8,7 @@ from PyQt6.QtGui import QColor
 
 ORG_NAME = "OropezaApps"
 APP_NAME = "GORO 2.3"
-APP_VERSION = "2.6.5"
+APP_VERSION = "2.6.6"
 APP_ID = "OropezaApps.GORO"
 APP_DISPLAY_NAME = f"GORO {APP_VERSION}"
 
@@ -67,6 +67,7 @@ def accent_text_color(hex_bg: str) -> str:
         return "#ffffff"
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
     return "#000000" if luminance > 150 else "#ffffff"
+
 
 
 
