@@ -56,6 +56,7 @@ from .main_window_hardware_groups_widget import (
     load_dropdown_options,
 )
 from .main_window_ui_helpers import QMessageBox
+from .hardware_configurator import HardwareConfiguratorDialog
 from core.optional_services import HAS_REPORTLAB
 from widgets.table_helpers import ComboBoxDelegate, HardwarePasteEventFilter, NoRowHeaderTable
 
@@ -111,6 +112,11 @@ class CombinedHardwareWidget(QWidget):
         add_part_button.clicked.connect(self.show_add_hardware_part_dialog)
         add_part_button.setMaximumWidth(200)
         left_header_layout.addWidget(add_part_button)
+
+        configure_part_button = QPushButton("Configure Part")
+        configure_part_button.clicked.connect(self.show_configure_part_wizard)
+        configure_part_button.setMaximumWidth(160)
+        left_header_layout.addWidget(configure_part_button)
 
         consolidate_button = QPushButton("Consolidate")
         consolidate_button.clicked.connect(self.consolidate_hardware_parts)
@@ -2732,7 +2738,89 @@ class CombinedHardwareWidget(QWidget):
         cancel_button.clicked.connect(dialog.reject)
         
         dialog.exec()
-    
+
+    def show_configure_part_wizard(self):
+        """Launch the Hardware Configurator wizard and insert the result."""
+        dlg = HardwareConfiguratorDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.result_data:
+            return
+
+        data = dlg.result_data
+        table = self.hardware_table
+
+        # Resolve column indices by name
+        mfr_col = self._get_header_index(self.hardware_all_headers, "MFR")
+        part_col = self._get_hardware_part_col_idx()
+        finish_col = self._get_header_index(self.hardware_all_headers, "FINISH")
+        if finish_col is None:
+            finish_col = self._get_header_index(self.hardware_all_headers, "Finish")
+        category_col = self._get_header_index(self.hardware_all_headers, "Category")
+        quoted_col = self._get_header_index(self.hardware_all_headers, "Quoted")
+
+        # Find a row where Hardware Part is empty, otherwise append
+        target_row = None
+        for r in range(table.rowCount()):
+            cell = table.item(r, part_col + 1)  # +1 for checkbox column
+            if not cell or not cell.text().strip():
+                target_row = r
+                break
+        if target_row is None:
+            target_row = table.rowCount()
+            table.setRowCount(target_row + 1)
+
+        table.blockSignals(True)
+
+        # Build a row of empty strings, then fill the configured columns
+        row_values = [""] * len(self.hardware_all_headers)
+        if mfr_col is not None:
+            row_values[mfr_col] = data["manufacturer"]
+        if part_col is not None:
+            row_values[part_col] = data["part_number"]
+        if finish_col is not None:
+            row_values[finish_col] = data["finish"]
+        if category_col is not None:
+            row_values[category_col] = data["category"]
+
+        for c, value in enumerate(row_values):
+            if c >= len(self.hardware_all_headers):
+                break
+            item = QTableWidgetItem(str(value) if value else "")
+            if quoted_col is not None and c == quoted_col:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Unchecked)
+                item.setText("")
+            elif self.hardware_part_id_col_idx is not None and c == self.hardware_part_id_col_idx:
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                item.setBackground(QColor(60, 60, 60))
+                item.setForeground(QColor(200, 200, 200))
+                if not item.text().strip():
+                    item.setText(self._generate_part_id())
+            else:
+                item.setFlags(
+                    item.flags()
+                    | Qt.ItemFlag.ItemIsEditable
+                    | Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                )
+            table.setItem(target_row, c + 1, item)  # +1 for checkbox column
+
+        # Checkbox in column 0
+        checkbox_item = QTableWidgetItem()
+        checkbox_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+        checkbox_item.setCheckState(Qt.CheckState.Unchecked)
+        checkbox_item.setText("")
+        table.setItem(target_row, 0, checkbox_item)
+
+        table.blockSignals(False)
+        self.on_hardware_table_changed(checkbox_item)
+        self.changes_made = True
+
+        QMessageBox.information(
+            self,
+            "Configure Part",
+            f"Added '{data['part_number']}' to Hardware table.",
+        )
+
     def load_assigned_openings(self):
         """Load assigned openings for the selected hardware group."""
         self.openings_table.setRowCount(0)
