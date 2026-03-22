@@ -228,6 +228,10 @@ def assemble_part_number(family_id: int, selections: Dict[str, str]) -> str:
     result = pattern
     for key, val in selections.items():
         result = result.replace("{" + key + "}", val)
+    # Remove unfilled placeholders and collapse extra whitespace
+    import re as _re
+    result = _re.sub(r"\{[^}]+\}", "", result)
+    result = " ".join(result.split())
     return result
 
 
@@ -241,4 +245,7 @@ def assemble_description(family_id: int, selections: Dict[str, str]) -> str:
     result = template
     for key, val in selections.items():
         result = result.replace("{" + key + "}", val)
+    import re as _re
+    result = _re.sub(r"\{[^}]+\}", "", result)
+    result = " ".join(result.split())
     return result

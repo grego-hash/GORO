@@ -39,6 +39,7 @@ class HardwareConfiguratorDialog(QDialog):
         self._family_id: int | None = None
         self._slot_combos: dict[str, QComboBox] = {}
         self._slot_rows: dict[str, tuple[QLabel, QWidget]] = {}
+        self._refreshing: bool = False
 
         # Populated on accept
         self.result_data: dict | None = None
@@ -201,50 +202,57 @@ class HardwareConfiguratorDialog(QDialog):
         return sels
 
     def _refresh_all_slots(self):
-        if not self._family_id:
+        if not self._family_id or self._refreshing:
             return
 
-        selections = self._get_current_selections()
-        slots = get_slots(self._family_id)
+        self._refreshing = True
+        try:
+            for combo in self._slot_combos.values():
+                combo.blockSignals(True)
 
-        for slot in slots:
-            sname = slot["slot_name"]
-            combo = self._slot_combos.get(sname)
-            if not combo:
-                continue
+            selections = self._get_current_selections()
+            slots = get_slots(self._family_id)
 
-            valid = get_valid_options(self._family_id, sname, selections)
-            label, widget = self._slot_rows.get(sname, (None, None))
+            for slot in slots:
+                sname = slot["slot_name"]
+                combo = self._slot_combos.get(sname)
+                if combo is None:
+                    continue
 
-            # Hide optional slots with no valid options
-            if not slot["required"] and len(valid) == 0:
-                if label:
-                    label.setVisible(False)
-                combo.setVisible(False)
-                continue
-            else:
-                if label:
-                    label.setVisible(True)
-                combo.setVisible(True)
+                valid = get_valid_options(self._family_id, sname, selections)
+                label, widget = self._slot_rows.get(sname, (None, None))
 
-            # Preserve current selection if still valid
-            current_val = combo.currentData()
+                # Hide optional slots with no valid options
+                if not slot["required"] and len(valid) == 0:
+                    if label is not None:
+                        label.setVisible(False)
+                    combo.setVisible(False)
+                    continue
+                else:
+                    if label is not None:
+                        label.setVisible(True)
+                    combo.setVisible(True)
 
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItem("-- Select --", None)
-            for opt in valid:
-                display = opt["display_name"] if opt["display_name"] else opt["value"]
-                combo.addItem(display, opt["value"])
+                # Preserve current selection if still valid
+                current_val = combo.currentData()
 
-            # Restore previous selection if still present
-            if current_val:
-                for i in range(combo.count()):
-                    if combo.itemData(i) == current_val:
-                        combo.setCurrentIndex(i)
-                        break
+                combo.clear()
+                combo.addItem("-- Select --", None)
+                for opt in valid:
+                    display = opt["display_name"] if opt["display_name"] else opt["value"]
+                    combo.addItem(display, opt["value"])
 
-            combo.blockSignals(False)
+                # Restore previous selection if still present
+                if current_val:
+                    for i in range(combo.count()):
+                        if combo.itemData(i) == current_val:
+                            combo.setCurrentIndex(i)
+                            break
+
+            for combo in self._slot_combos.values():
+                combo.blockSignals(False)
+        finally:
+            self._refreshing = False
 
     def _on_slot_changed(self):
         self._refresh_all_slots()
