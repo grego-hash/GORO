@@ -11,6 +11,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.hw_configurator_db import get_connection, init_db
 
 
+def seed_families(conn):
+    """Seed all Schlage L-Series families into an already-open connection."""
+    _seed_l_series_lock(conn)
+    _seed_conventional_cylinders(conn)
+    _seed_fsic_cylinders(conn)
+    _seed_sfic_cylinders(conn)
+    _seed_armored_fronts(conn)
+    _seed_strikes(conn)
+    _seed_thumbturn_cylinders(conn)
+    _seed_blocking_rings(conn)
+    _seed_le_wireless(conn)
+    print("  Schlage L-Series seeded.")
+
+
 def seed():
     # Delete existing DB so stale data never accumulates
     db_path = Path(__file__).resolve().parent.parent / "data" / "hw_configurator.db"
@@ -19,15 +33,7 @@ def seed():
     init_db()
     conn = get_connection()
     try:
-        _seed_l_series_lock(conn)
-        _seed_conventional_cylinders(conn)
-        _seed_fsic_cylinders(conn)
-        _seed_sfic_cylinders(conn)
-        _seed_armored_fronts(conn)
-        _seed_strikes(conn)
-        _seed_thumbturn_cylinders(conn)
-        _seed_blocking_rings(conn)
-        _seed_le_wireless(conn)
+        seed_families(conn)
         conn.commit()
         print("Schlage L-Series seed data loaded successfully.")
     finally:
