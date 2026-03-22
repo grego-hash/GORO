@@ -33,7 +33,8 @@ from core.utils import clamped_size
 
 _CSV_HEADERS = ["Category", "Code", "Description", "Size", "Template", "Lock Backset", "Strike Offset"]
 
-_DEFAULT_CSV = ensure_seeded_csv("Prep_Codes.csv")
+def _default_csv_path() -> Path:
+    return ensure_seeded_csv("Prep_Codes.csv")
 
 _KNOWN_CATEGORIES = [
     "Hinge",
@@ -53,7 +54,7 @@ class PrepCodesEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Prep Codes / Templates")
         self.resize(*clamped_size(960, 620))
-        self._csv_path = csv_path or _DEFAULT_CSV
+        self._csv_path = csv_path or _default_csv_path()
         self._dirty = False
         self._build_ui()
         self._load_csv()

@@ -33,7 +33,8 @@ from core.utils import clamped_size
 
 _CSV_HEADERS = ["Locktype", "Model", "Description", "Size", "Template"]
 
-_DEFAULT_CSV = ensure_seeded_csv("Lock_Models.csv")
+def _default_csv_path() -> Path:
+    return ensure_seeded_csv("Lock_Models.csv")
 
 
 def _locktype_choices() -> List[str]:
@@ -53,7 +54,7 @@ class LockModelsEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Lock Models")
         self.resize(*clamped_size(960, 620))
-        self._csv_path = csv_path or _DEFAULT_CSV
+        self._csv_path = csv_path or _default_csv_path()
         self._dirty = False
         self._locktype_list = _locktype_choices()
         self._build_ui()

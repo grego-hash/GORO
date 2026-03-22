@@ -14,8 +14,6 @@ from typing import Dict, List, Optional
 
 from core.seeded_data import ensure_seeded_csv
 
-_CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "Hinge_Specs.csv"
-
 LOCK_COLUMNS = (
     "Cylindrical", "Mortise", "Rim_Panic",
     "CVR_Panic", "SVR_Panic", "Mortise_Panic", "Concealed_Cable",
@@ -120,7 +118,7 @@ class HingeSpecDB:
 
     @staticmethod
     def save(rows: List[HingeSpec], path: Path | None = None) -> None:
-        p = path or _CSV_PATH
+        p = path or ensure_seeded_csv("Hinge_Specs.csv")
         p.parent.mkdir(parents=True, exist_ok=True)
         fieldnames = [
             "Manufacturer", "Height", "D1", "D2", "D3", "D4",

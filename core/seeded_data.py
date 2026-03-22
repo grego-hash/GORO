@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import csv
 import shutil
+import sys
 from pathlib import Path
 
+from PyQt6.QtCore import QSettings
 
-_APP_ROOT = Path(__file__).resolve().parent.parent
-_DATA_DIR = _APP_ROOT / "data"
+from core.constants import APP_NAME, ORG_NAME
+from core.models import resolve_data_root
+
+
+def _resolve_app_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+_APP_ROOT = _resolve_app_root()
 _SEED_DIR = _APP_ROOT / "seed_data"
 
 
@@ -29,7 +40,8 @@ def ensure_seeded_csv(filename: str) -> Path:
     This protects installed updates from carrying forward missing or header-only
     CSV files while still preserving legitimate user-customized populated files.
     """
-    live_path = _DATA_DIR / filename
+    settings = QSettings(ORG_NAME, APP_NAME)
+    live_path = resolve_data_root(settings) / filename
     seed_path = _SEED_DIR / filename
 
     should_restore = not live_path.exists() or not _csv_has_data_rows(live_path)
