@@ -11,6 +11,8 @@ import csv
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from core.seeded_data import ensure_seeded_csv
+
 
 # Normalise category names used in the Hardware table's Category column
 # to the canonical category names used in Prep_Codes.csv.
@@ -100,7 +102,7 @@ class PrepCodeDB:
                 db._by_code[code.upper()] = entry
                 db._by_category.setdefault(cat, []).append(entry)
         # Load lock models from companion CSV
-        lock_csv = csv_path.parent / "Lock_Models.csv"
+        lock_csv = ensure_seeded_csv("Lock_Models.csv")
         if lock_csv.exists():
             with open(lock_csv, newline="", encoding="utf-8-sig") as f:
                 reader = csv.DictReader(f)
@@ -120,7 +122,7 @@ class PrepCodeDB:
     @classmethod
     def load_default(cls) -> "PrepCodeDB":
         """Load from the standard ``data/Prep_Codes.csv`` location."""
-        csv_path = Path(__file__).resolve().parent.parent / "data" / "Prep_Codes.csv"
+        csv_path = ensure_seeded_csv("Prep_Codes.csv")
         return cls.from_csv(csv_path)
 
     # ── Queries ─────────────────────────────────────────────────────

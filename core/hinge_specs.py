@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from core.seeded_data import ensure_seeded_csv
+
 _CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "Hinge_Specs.csv"
 
 LOCK_COLUMNS = (
@@ -93,7 +95,7 @@ class HingeSpecDB:
     # ── persistence ─────────────────────────────────────────────
     @classmethod
     def load(cls, path: Path | None = None) -> "HingeSpecDB":
-        p = path or _CSV_PATH
+        p = path or ensure_seeded_csv("Hinge_Specs.csv")
         rows: List[HingeSpec] = []
         if not p.exists():
             return cls(rows)

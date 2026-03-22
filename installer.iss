@@ -40,6 +40,10 @@ Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Ad
 Source: "dist\GORO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "data\*.csv"
 ; User data CSV files: only installed when they do not already exist (fresh install only).
 Source: "data\*.csv"; DestDir: "{app}\data"; Flags: onlyifdoesntexist
+; Seed copies: always available so the app can repair missing/header-only fabrication CSVs after updates.
+Source: "data\Prep_Codes.csv"; DestDir: "{app}\seed_data"; Flags: ignoreversion
+Source: "data\Lock_Models.csv"; DestDir: "{app}\seed_data"; Flags: ignoreversion
+Source: "data\Hinge_Specs.csv"; DestDir: "{app}\seed_data"; Flags: ignoreversion
 ; Include the official Tesseract installer so GORO setup can provision OCR automatically.
 Source: "tools\installers\{#TesseractInstallerName}"; DestDir: "{tmp}"; Flags: deleteafterinstall ignoreversion; Check: FileExists(ExpandConstant('{src}\tools\installers\{#TesseractInstallerName}'))
 

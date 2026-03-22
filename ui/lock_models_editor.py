@@ -28,11 +28,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.seeded_data import ensure_seeded_csv
 from core.utils import clamped_size
 
 _CSV_HEADERS = ["Locktype", "Model", "Description", "Size", "Template"]
 
-_DEFAULT_CSV = Path(__file__).resolve().parent.parent / "data" / "Lock_Models.csv"
+_DEFAULT_CSV = ensure_seeded_csv("Lock_Models.csv")
 
 
 def _locktype_choices() -> List[str]:

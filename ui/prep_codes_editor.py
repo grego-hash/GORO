@@ -28,11 +28,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.seeded_data import ensure_seeded_csv
 from core.utils import clamped_size
 
 _CSV_HEADERS = ["Category", "Code", "Description", "Size", "Template", "Lock Backset", "Strike Offset"]
 
-_DEFAULT_CSV = Path(__file__).resolve().parent.parent / "data" / "Prep_Codes.csv"
+_DEFAULT_CSV = ensure_seeded_csv("Prep_Codes.csv")
 
 _KNOWN_CATEGORIES = [
     "Hinge",
