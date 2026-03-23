@@ -234,6 +234,7 @@ class MainWindow(QMainWindow):
         self._migrate_awarded_bids_to_projects_once()
 
         self._ensure_proposal_tab_migration()
+        self._ensure_hardware_list_price_migration()
 
         # Previous selection (for context menu restoration)
         self._prev_selected_name: Optional[str] = None
@@ -3272,6 +3273,79 @@ class MainWindow(QMainWindow):
                     self._ensure_proposal_json(workbook)
 
         self.settings.setValue("proposal_tab_migrated", True)
+
+    def _ensure_hardware_list_price_migration(self) -> None:
+        """One-time pass: add 'List Price' column to Hardware.csv in active bids & projects."""
+        if self.settings.value("hw_list_price_migrated", False, type=bool):
+            return
+
+        template_csv = APP_ROOT / "data" / "WB_Template" / "Hardware.csv"
+        if not template_csv.exists():
+            self.settings.setValue("hw_list_price_migrated", True)
+            return
+
+        tmpl_headers, _ = self._read_csv_table(template_csv)
+        if not tmpl_headers:
+            self.settings.setValue("hw_list_price_migrated", True)
+            return
+
+        tmpl_norm = [h.strip().lower() for h in tmpl_headers]
+
+        # Collect all workbook folders from bids and projects (skip submitted/awarded)
+        search_roots = [self.paths.bids, self.paths.projects]
+        hw_csv_paths: list[Path] = []
+        for root in search_roots:
+            if not root.exists():
+                continue
+            for parent_dir in root.iterdir():
+                if not parent_dir.is_dir():
+                    continue
+                wb_folder = parent_dir / "4.Workbooks"
+                if not wb_folder.exists():
+                    continue
+                for workbook in wb_folder.iterdir():
+                    if workbook.is_dir() and not workbook.name.startswith('.'):
+                        hw_csv = workbook / "Hardware.csv"
+                        if hw_csv.exists():
+                            hw_csv_paths.append(hw_csv)
+
+        upgraded = 0
+        for hw_csv in hw_csv_paths:
+            old_headers, old_data = self._read_csv_table(hw_csv)
+            if not old_headers:
+                continue
+            old_norm = [h.strip().lower() for h in old_headers]
+            if old_norm == tmpl_norm:
+                continue  # already up to date
+
+            # Build column mapping: template col → old col index
+            old_lookup: Dict[str, int] = {}
+            for i, h in enumerate(old_norm):
+                if h and h not in old_lookup:
+                    old_lookup[h] = i
+            col_map: list[int | None] = [old_lookup.get(nh) for nh in tmpl_norm]
+
+            # Preserve extra old columns not in template
+            mapped_old = {idx for idx in col_map if idx is not None}
+            extra_old = [i for i in range(len(old_headers)) if i not in mapped_old]
+            final_headers = list(tmpl_headers) + [old_headers[i] for i in extra_old]
+
+            new_data: list[list[str]] = []
+            for row in old_data:
+                new_row = [row[oi] if oi is not None and oi < len(row) else "" for oi in col_map]
+                new_row += [row[ei] if ei < len(row) else "" for ei in extra_old]
+                new_data.append(new_row)
+
+            try:
+                with open(hw_csv, "w", newline="", encoding="utf-8-sig") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(final_headers)
+                    writer.writerows(new_data)
+                upgraded += 1
+            except Exception:
+                pass  # best-effort; skip files that can't be written
+
+        self.settings.setValue("hw_list_price_migrated", True)
 
     # ---------- UI Construction ----------
 

@@ -1,5 +1,6 @@
 """Hardware Configurator database layer using SQLite."""
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -75,6 +76,35 @@ def init_db():
                 ON hw_rules(family_id);
             CREATE INDEX IF NOT EXISTS idx_rules_trigger
                 ON hw_rules(family_id, trigger_slot, trigger_value);
+
+            CREATE TABLE IF NOT EXISTS hw_favorites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                label TEXT NOT NULL,
+                family_id INTEGER NOT NULL REFERENCES hw_families(id) ON DELETE CASCADE,
+                selections_json TEXT NOT NULL DEFAULT '{}',
+                part_number TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                manufacturer TEXT NOT NULL DEFAULT '',
+                category TEXT NOT NULL DEFAULT '',
+                finish TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_favorites_user
+                ON hw_favorites(username);
+
+            CREATE TABLE IF NOT EXISTS hw_pricing (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                family_id INTEGER NOT NULL REFERENCES hw_families(id) ON DELETE CASCADE,
+                slot_name TEXT NOT NULL,
+                slot_value TEXT NOT NULL,
+                price_type TEXT NOT NULL DEFAULT 'base'
+                    CHECK(price_type IN ('base','adder')),
+                amount REAL NOT NULL DEFAULT 0.0,
+                UNIQUE(family_id, slot_name, slot_value)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pricing_family
+                ON hw_pricing(family_id, slot_name);
         """)
         conn.commit()
     finally:
@@ -225,13 +255,22 @@ def assemble_part_number(family_id: int, selections: Dict[str, str]) -> str:
         slots = get_slots(family_id)
         parts = [selections.get(s["slot_name"], "") for s in slots]
         return "".join(p for p in parts if p)
+    # Track which keys have placeholders in the pattern
+    import re as _re
+    in_pattern = set(_re.findall(r"\{(\w+)\}", pattern))
     result = pattern
     for key, val in selections.items():
         result = result.replace("{" + key + "}", val)
     # Remove unfilled placeholders and collapse extra whitespace
-    import re as _re
     result = _re.sub(r"\{[^}]+\}", "", result)
     result = " ".join(result.split())
+    # Append selected optional values not covered by the pattern
+    extras = []
+    for key, val in selections.items():
+        if key not in in_pattern and val:
+            extras.append(val)
+    if extras:
+        result = result + " " + " ".join(extras)
     return result
 
 
@@ -242,10 +281,126 @@ def assemble_description(family_id: int, selections: Dict[str, str]) -> str:
     template = family["description_template"]
     if not template:
         return assemble_part_number(family_id, selections)
+    # Track which keys have placeholders in the template
+    import re as _re
+    in_template = set(_re.findall(r"\{(\w+)\}", template))
     result = template
     for key, val in selections.items():
         result = result.replace("{" + key + "}", val)
-    import re as _re
     result = _re.sub(r"\{[^}]+\}", "", result)
     result = " ".join(result.split())
+    # Append selected optional values not covered by the template
+    extras = []
+    for key, val in selections.items():
+        if key not in in_template and val:
+            extras.append(val)
+    if extras:
+        result = result + " " + " ".join(extras)
     return result
+
+
+# ------------------------------------------------------------------
+# Favorites helpers
+# ------------------------------------------------------------------
+
+def get_favorites(username: str) -> List[dict]:
+    """Return all favorites for a given user, sorted by label."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, label, family_id, selections_json, part_number, "
+            "description, manufacturer, category, finish "
+            "FROM hw_favorites WHERE username = ? ORDER BY label",
+            (username,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def save_favorite(username: str, label: str, family_id: int,
+                  selections: Dict[str, str], part_number: str,
+                  description: str, manufacturer: str,
+                  category: str, finish: str) -> int:
+    """Save a new favorite and return its id."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO hw_favorites "
+            "(username, label, family_id, selections_json, part_number, "
+            " description, manufacturer, category, finish) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (username, label, family_id, json.dumps(selections),
+             part_number, description, manufacturer, category, finish),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_favorite(fav_id: int):
+    """Delete a favorite by id."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM hw_favorites WHERE id = ?", (fav_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ------------------------------------------------------------------
+# Pricing helpers
+# ------------------------------------------------------------------
+
+def get_list_price(family_id: int, selections: Dict[str, str]) -> Optional[float]:
+    """Compute the list price for a configuration.
+
+    The total is the sum of a single 'base' row (matched by the first
+    selected slot that has a base entry) plus all 'adder' rows that
+    match the current selections.  Returns *None* when no base price
+    is found (i.e. no pricing data exists for this family).
+
+    Compound keys are supported: a slot_name like ``"rose:finish"`` with
+    slot_value ``"N:605"`` matches only when *both* selections match.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT slot_name, slot_value, price_type, amount "
+            "FROM hw_pricing WHERE family_id = ?",
+            (family_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return None
+
+    base = None
+    adder_total = 0.0
+
+    for r in rows:
+        sn = r["slot_name"]
+        sv = r["slot_value"]
+        if ":" in sn:
+            # Compound key — all sub-slots must match
+            parts = sn.split(":")
+            vals = sv.split(":")
+            if len(parts) != len(vals):
+                continue
+            if not all(selections.get(p) == v for p, v in zip(parts, vals)):
+                continue
+        else:
+            sel_val = selections.get(sn)
+            if sel_val is None or sel_val != sv:
+                continue
+
+        if r["price_type"] == "base":
+            base = r["amount"]
+        else:
+            adder_total += r["amount"]
+
+    if base is None:
+        return None
+    return base + adder_total

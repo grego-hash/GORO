@@ -99,6 +99,8 @@ def _seed_sargent_80(conn):
     sizes = [
         ("3FT",  "3' (36\")"),
         ("4FT",  "4' (48\")"),
+        ("5FT",  "5' (60\")"),
+        ("6FT",  "6' (72\")"),
     ]
     options(conn, f, "size", sizes)
 
@@ -157,6 +159,8 @@ def _seed_ed5000(conn):
         ("LWM", "LWM - Lustra"),
         ("DSM", "DSM - Dirke"),
         ("GRC", "GRC - Grier"),
+        ("MZD", "MZD - Montrose"),
+        ("RGC", "RGC - Regis"),
     ]
     options(conn, f, "lever", levers)
 
@@ -172,6 +176,8 @@ def _seed_ed5000(conn):
     sizes = [
         ("3FT",  "3' (36\")"),
         ("4FT",  "4' (48\")"),
+        ("5FT",  "5' (60\")"),
+        ("6FT",  "6' (72\")"),
     ]
     options(conn, f, "size", sizes)
 

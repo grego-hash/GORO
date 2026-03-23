@@ -8,7 +8,6 @@ def seed(conn):
     _seed_assa_cylinders(conn)
     _seed_cr_access800(conn)
     _seed_norton_6000(conn)
-    _seed_lcn_2010(conn)
     _seed_ives_stops(conn)
     print("  ASSA ABLOY misc + Allegion misc seeded.")
 

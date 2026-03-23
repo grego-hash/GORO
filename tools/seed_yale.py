@@ -9,9 +9,11 @@ YALE_FINISHES = [
     ("612",  "612 - Satin Bronze"),
     ("613",  "613 - Oil Rubbed Bronze"),
     ("619",  "619 - Satin Nickel"),
+    ("622",  "622 - Flat Black"),
     ("625",  "625 - Bright Chrome"),
     ("626",  "626 - Satin Chrome"),
     ("630",  "630 - Satin Stainless Steel"),
+    ("643e", "643e - Aged Bronze"),
 ]
 
 
@@ -92,9 +94,11 @@ def _seed_8800fl(conn):
     options(conn, f, "lever", levers)
 
     roses = [
-        ("LC",  "LC - Escutcheon"),
+        ("LC",  "LC - Escutcheon Plate"),
         ("RR",  "RR - Round Rose"),
         ("SR",  "SR - Square Rose"),
+        ("SC",  "SC - Sectional Trim"),
+        ("WR",  "WR - Wide Rose"),
     ]
     options(conn, f, "rose", roses)
 
@@ -176,6 +180,9 @@ def _seed_4700ln(conn):
 
     roses = [
         ("RR", "RR - Round Rose"),
+        ("SR", "SR - Square Rose"),
+        ("LC", "LC - Escutcheon Plate"),
+        ("SC", "SC - Sectional Rose"),
     ]
     options(conn, f, "rose", roses)
 

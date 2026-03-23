@@ -1,6 +1,7 @@
 ﻿"""CombinedHardwareWidget extracted from main_window.py."""
 
 import csv
+import json
 import re
 import tempfile
 import uuid
@@ -78,6 +79,7 @@ class CombinedHardwareWidget(QWidget):
         self.hardware_part_col_idx = None
         self.hardware_count_col_idx = None
         self.hardware_part_id_col_idx = None
+        self.hardware_config_data_col_idx = None
         self.hardware_groups_part_id_col_idx = None
         self.hardware_table: NoRowHeaderTable
         self._hardware_paste_filter: HardwarePasteEventFilter | None = None
@@ -443,6 +445,15 @@ class CombinedHardwareWidget(QWidget):
             if not str(row[part_id_idx]).strip():
                 row[part_id_idx] = self._generate_part_id()
 
+        # Ensure _config_data hidden column exists for configurator metadata
+        cfg_idx = self._get_header_index(self.hardware_all_headers, "_config_data")
+        if cfg_idx is None:
+            self.hardware_all_headers.append("_config_data")
+            for row in self.hardware_all_rows:
+                row.append("")
+            cfg_idx = len(self.hardware_all_headers) - 1
+        self.hardware_config_data_col_idx = cfg_idx
+
         self._normalize_hardware_groups_schema()
 
     def _generate_part_id(self):
@@ -612,6 +623,10 @@ class CombinedHardwareWidget(QWidget):
             self.hardware_table.customContextMenuRequested.disconnect(self.show_hardware_context_menu)
         except Exception:
             pass
+        try:
+            self.hardware_table.cellDoubleClicked.disconnect(self._on_hardware_cell_double_clicked)
+        except Exception:
+            pass
 
         self.hardware_table.blockSignals(True)
         self.hardware_table.setSortingEnabled(False)
@@ -625,21 +640,26 @@ class CombinedHardwareWidget(QWidget):
         row_count = len(self.hardware_all_rows) + 1
         self.hardware_table.setRowCount(row_count)
         
-        # Find Quoted column index in original data
+        # Find key column indices in original data
         quoted_col_idx = None
         count_col_idx = None
         part_id_col_idx = None
+        config_data_col_idx = None
         part_col_idx = self._get_hardware_part_col_idx()
         for idx, header in enumerate(self.hardware_all_headers):
-            if header.strip().lower() == "quoted":
+            hl = header.strip().lower()
+            if hl == "quoted":
                 quoted_col_idx = idx
-            if header.strip().lower() in ("count", "qty", "quantity"):
+            if hl in ("count", "qty", "quantity"):
                 count_col_idx = idx
-            if header.strip().lower() == "part id":
+            if hl == "part id":
                 part_id_col_idx = idx
+            if hl == "_config_data":
+                config_data_col_idx = idx
         self.hardware_part_col_idx = part_col_idx
         self.hardware_count_col_idx = count_col_idx
         self.hardware_part_id_col_idx = part_id_col_idx
+        self.hardware_config_data_col_idx = config_data_col_idx
         
         # Load existing data and fill remaining rows with empty editable cells
         for row_idx in range(row_count):
@@ -676,8 +696,8 @@ class CombinedHardwareWidget(QWidget):
                     item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
                     item.setCheckState(Qt.CheckState.Checked if str(value).lower() == "yes" else Qt.CheckState.Unchecked)
                     item.setText("")
-                elif col_idx == part_id_col_idx:
-                    # Part ID is internal; prevent manual edits
+                elif col_idx in (part_id_col_idx, config_data_col_idx):
+                    # Internal columns; prevent manual edits
                     item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                     item.setBackground(QColor(60, 60, 60))
                     item.setForeground(QColor(200, 200, 200))
@@ -691,6 +711,12 @@ class CombinedHardwareWidget(QWidget):
                     item.setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 
                 self.hardware_table.setItem(row_idx, col_idx + 1, item)  # +1 because of Select column
+
+            # Lock configured rows (those with _config_data)
+            if config_data_col_idx is not None:
+                cfg_val = row_data[config_data_col_idx] if config_data_col_idx < len(row_data) else ""
+                if str(cfg_val).strip():
+                    self._lock_configured_row(row_idx)
         
         # Resize columns
         self.hardware_table.resizeColumnsToContents()
@@ -700,10 +726,13 @@ class CombinedHardwareWidget(QWidget):
 
         if part_id_col_idx is not None:
             self.hardware_table.setColumnHidden(part_id_col_idx + 1, True)
+        if config_data_col_idx is not None:
+            self.hardware_table.setColumnHidden(config_data_col_idx + 1, True)
         
         # Connect change handlers - use multiple signals to catch both text and checkbox changes
         self.hardware_table.itemChanged.connect(self.on_hardware_table_changed)
         self.hardware_table.itemClicked.connect(self.on_hardware_table_clicked)
+        self.hardware_table.cellDoubleClicked.connect(self._on_hardware_cell_double_clicked)
 
         def on_hardware_current_item_changed(current, previous, old_vals=self._hardware_old_values):
             if current:
@@ -809,6 +838,8 @@ class CombinedHardwareWidget(QWidget):
         self.hardware_table.setSortingEnabled(True)
         self.apply_hardware_filter()
         self.hardware_table.blockSignals(False)
+        # Recalculate Material Cost for rows that have a List Price
+        self._recalculate_all_material_costs()
 
     def reload_from_disk(self, schedule_data, hardware_all_data, hardware_groups_data):
         """Refresh the widget from workbook CSV data without rebuilding the dialog."""
@@ -842,6 +873,8 @@ class CombinedHardwareWidget(QWidget):
 
         for col in range(1, self.hardware_table.columnCount()):
             if self.hardware_part_id_col_idx is not None and col == self.hardware_part_id_col_idx + 1:
+                continue
+            if self.hardware_config_data_col_idx is not None and col == self.hardware_config_data_col_idx + 1:
                 continue
             item = self.hardware_table.item(row_idx, col)
             if not item:
@@ -890,12 +923,235 @@ class CombinedHardwareWidget(QWidget):
                 item = QTableWidgetItem("")
                 table.setItem(row_idx, table_col_idx, item)
 
-            if data_col_idx == self.hardware_part_id_col_idx or data_col_idx == self.hardware_count_col_idx:
+            if data_col_idx in (self.hardware_part_id_col_idx, self.hardware_count_col_idx, self.hardware_config_data_col_idx):
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 item.setBackground(QColor(60, 60, 60))
                 item.setForeground(QColor(200, 200, 200))
             else:
                 item.setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+
+    # ------------------------------------------------------------------
+    # Configured-row locking helpers
+    # ------------------------------------------------------------------
+
+    _LOCKED_BG = QColor(35, 40, 50)       # subtle blue-grey tint
+    _LOCKED_FG = QColor(180, 190, 200)
+
+    def _is_row_configured(self, row_idx: int) -> bool:
+        """Return True if the row was created by the configurator."""
+        if self.hardware_config_data_col_idx is None:
+            return False
+        item = self.hardware_table.item(row_idx, self.hardware_config_data_col_idx + 1)
+        return item is not None and bool(item.text().strip())
+
+    def _get_row_config_data(self, row_idx: int) -> dict | None:
+        """Return the stored configurator metadata for a row, or None."""
+        if self.hardware_config_data_col_idx is None:
+            return None
+        item = self.hardware_table.item(row_idx, self.hardware_config_data_col_idx + 1)
+        if item is None:
+            return None
+        raw = item.text().strip()
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def _lock_configured_row(self, row_idx: int):
+        """Make every visible cell in a configured row non-editable with a visual tint.
+
+        If the List Price cell is blank (configurator returned no price),
+        it is left editable so the user can manually enter a price.
+        """
+        table = self.hardware_table
+        quoted_col = self._get_header_index(self.hardware_all_headers, "quoted")
+        vendor_col = self._get_header_index(self.hardware_all_headers, "vendor")
+        list_price_col = self._get_header_index(self.hardware_all_headers, "list price")
+        for data_col in range(len(self.hardware_all_headers)):
+            table_col = data_col + 1
+            item = table.item(row_idx, table_col)
+            if item is None:
+                continue
+            # Leave checkbox columns functional, vendor editable
+            if data_col == quoted_col:
+                continue
+            if data_col == vendor_col:
+                continue
+            # Keep calculated / internal columns as-is
+            if data_col in (self.hardware_part_id_col_idx, self.hardware_count_col_idx, self.hardware_config_data_col_idx):
+                continue
+            # Leave List Price editable when blank so user can enter price manually
+            if data_col == list_price_col and not item.text().strip():
+                continue
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            item.setBackground(self._LOCKED_BG)
+            item.setForeground(self._LOCKED_FG)
+
+    def _unlock_hardware_row(self, row_idx: int):
+        """Remove lock and configurator metadata, making the row fully editable."""
+        table = self.hardware_table
+        quoted_col = self._get_header_index(self.hardware_all_headers, "quoted")
+        # Clear config data
+        if self.hardware_config_data_col_idx is not None:
+            cfg_item = table.item(row_idx, self.hardware_config_data_col_idx + 1)
+            if cfg_item is not None:
+                cfg_item.setText("")
+        # Restore editable flags and default colors
+        for data_col in range(len(self.hardware_all_headers)):
+            table_col = data_col + 1
+            item = table.item(row_idx, table_col)
+            if item is None:
+                continue
+            if data_col == quoted_col:
+                continue
+            if data_col in (self.hardware_part_id_col_idx, self.hardware_count_col_idx, self.hardware_config_data_col_idx):
+                continue
+            item.setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            item.setBackground(QColor(0, 0, 0, 0))   # transparent / default
+            item.setForeground(QColor(0, 0, 0, 0))   # default
+        self.changes_made = True
+
+    def _on_hardware_cell_double_clicked(self, row: int, column: int):
+        """Re-launch configurator when user double-clicks a configured row."""
+        if not self._is_row_configured(row):
+            return
+        cfg = self._get_row_config_data(row)
+        if cfg is None:
+            return
+        self._edit_configured_row(row, cfg)
+
+    def _edit_configured_row(self, row_idx: int, cfg: dict):
+        """Open the configurator pre-populated with existing selections and update the row."""
+        family_id = cfg.get("family_id")
+        selections = cfg.get("selections", {})
+        if family_id is None:
+            return
+
+        dlg = HardwareConfiguratorDialog(
+            self, edit_family_id=family_id, edit_selections=selections
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.result_data:
+            return
+
+        data = dlg.result_data
+        table = self.hardware_table
+        table.blockSignals(True)
+
+        mfr_col = self._get_header_index(self.hardware_all_headers, "MFR")
+        part_col = self._get_hardware_part_col_idx()
+        finish_col = self._get_header_index(self.hardware_all_headers, "FINISH")
+        if finish_col is None:
+            finish_col = self._get_header_index(self.hardware_all_headers, "Finish")
+        category_col = self._get_header_index(self.hardware_all_headers, "Category")
+        list_price_col = self._get_header_index(self.hardware_all_headers, "List Price")
+
+        mapping = {
+            mfr_col: data["manufacturer"],
+            part_col: data["part_number"],
+            finish_col: data["finish"],
+            category_col: data["category"],
+        }
+        if list_price_col is not None and data.get("list_price") is not None:
+            mapping[list_price_col] = f"${data['list_price']:,.2f}"
+
+        for col_idx, value in mapping.items():
+            if col_idx is None:
+                continue
+            item = table.item(row_idx, col_idx + 1)
+            if item is not None:
+                item.setText(str(value) if value else "")
+
+        # Update config metadata
+        if self.hardware_config_data_col_idx is not None:
+            cfg_item = table.item(row_idx, self.hardware_config_data_col_idx + 1)
+            if cfg_item is not None:
+                cfg_item.setText(json.dumps({
+                    "family_id": data["family_id"],
+                    "selections": data["selections"],
+                }))
+
+        self._lock_configured_row(row_idx)
+        table.blockSignals(False)
+        self._recalculate_material_cost(row_idx)
+        self.on_hardware_table_changed(table.item(row_idx, 0))
+        self.changes_made = True
+
+    # ------------------------------------------------------------------
+    # Material Cost auto-calculation
+    # ------------------------------------------------------------------
+
+    def _get_vendor_price_modifier(self, vendor_name: str) -> float:
+        """Look up a vendor's Price Modifier from vendors_info.csv.
+
+        Returns the modifier as a float, or 1.0 if not found / blank.
+        """
+        if not vendor_name:
+            return 1.0
+        settings = QSettings(ORG_NAME, APP_NAME)
+        data_dir = resolve_data_root(settings)
+        vendors_path = data_dir / "vendors_info.csv"
+        if not vendors_path.exists():
+            return 1.0
+        try:
+            with open(vendors_path, "r", newline="", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get("Vendor Name", "").strip() == vendor_name:
+                        raw = row.get("Price Modifier", "").strip()
+                        if raw:
+                            return float(raw)
+                        return 1.0
+        except Exception:
+            pass
+        return 1.0
+
+    def _recalculate_material_cost(self, row_idx: int):
+        """Set Material Cost = List Price × Vendor Price Modifier for a row."""
+        list_price_col = self._get_header_index(self.hardware_all_headers, "List Price")
+        cost_col = self._get_header_index(self.hardware_all_headers, "Material Cost")
+        vendor_col = self._get_header_index(self.hardware_all_headers, "Vendor")
+        if list_price_col is None or cost_col is None:
+            return
+
+        lp_item = self.hardware_table.item(row_idx, list_price_col + 1)
+        if lp_item is None:
+            return
+        raw_lp = lp_item.text().strip().replace("$", "").replace(",", "")
+        if not raw_lp:
+            return
+        try:
+            list_price = float(raw_lp)
+        except ValueError:
+            return
+
+        vendor_name = ""
+        if vendor_col is not None:
+            v_item = self.hardware_table.item(row_idx, vendor_col + 1)
+            if v_item:
+                vendor_name = v_item.text().strip()
+
+        modifier = self._get_vendor_price_modifier(vendor_name)
+        material_cost = list_price * modifier
+
+        self.hardware_table.blockSignals(True)
+        cost_item = self.hardware_table.item(row_idx, cost_col + 1)
+        if cost_item is None:
+            cost_item = QTableWidgetItem()
+            self.hardware_table.setItem(row_idx, cost_col + 1, cost_item)
+        cost_item.setText(f"${material_cost:,.2f}")
+        self.hardware_table.blockSignals(False)
+
+    def _recalculate_all_material_costs(self):
+        """Re-run Material Cost calculation for every row with a List Price."""
+        list_price_col = self._get_header_index(self.hardware_all_headers, "List Price")
+        if list_price_col is None:
+            return
+        for row_idx in range(self.hardware_table.rowCount()):
+            lp_item = self.hardware_table.item(row_idx, list_price_col + 1)
+            if lp_item and lp_item.text().strip():
+                self._recalculate_material_cost(row_idx)
 
     def _ensure_hardware_table_has_trailing_blank_row(self):
         """Ensure at least one editable blank row exists at the bottom without shrinking existing rows."""
@@ -1291,17 +1547,40 @@ class CombinedHardwareWidget(QWidget):
             return
         
         row = item.row()
+        is_configured = self._is_row_configured(row)
         
         # Create context menu
         menu = QMenu(self.hardware_table)
+
+        # Configurator actions for configured rows
+        modify_action = None
+        unlock_action = None
+        if is_configured:
+            modify_action = menu.addAction("Modify in Configurator")
+            unlock_action = menu.addAction("Unlock Row (Manual Edit)")
+            menu.addSeparator()
+
         copy_action = menu.addAction("Copy Row")
         delete_action = menu.addAction("Delete Row")
         menu.addSeparator()
         insert_action = menu.addAction("Insert Row Above")
         
         action = menu.exec(self.hardware_table.mapToGlobal(pos))
-        
-        if action == copy_action:
+
+        if action is None:
+            return
+
+        if action == modify_action:
+            cfg = self._get_row_config_data(row)
+            if cfg:
+                self._edit_configured_row(row, cfg)
+
+        elif action == unlock_action:
+            self.hardware_table.blockSignals(True)
+            self._unlock_hardware_row(row)
+            self.hardware_table.blockSignals(False)
+
+        elif action == copy_action:
             # Copy row to clipboard
             row_data = []
             for c in range(1, self.hardware_table.columnCount()):  # Skip checkbox column
@@ -1593,6 +1872,12 @@ class CombinedHardwareWidget(QWidget):
                     break
             if count_col_idx is None or item.column() != count_col_idx + 1:
                 self.recalculate_all_hardware_counts()
+
+        # Recalculate Material Cost when Vendor changes on a row with List Price
+        if item is not None:
+            vendor_col = self._get_header_index(self.hardware_all_headers, "Vendor")
+            if vendor_col is not None and item.column() == vendor_col + 1:
+                self._recalculate_material_cost(item.row())
 
         # Refresh current group lookups (MFR/Finish/Category) after hardware edits
         self.refresh_current_group_metadata()
@@ -2756,6 +3041,7 @@ class CombinedHardwareWidget(QWidget):
             finish_col = self._get_header_index(self.hardware_all_headers, "Finish")
         category_col = self._get_header_index(self.hardware_all_headers, "Category")
         quoted_col = self._get_header_index(self.hardware_all_headers, "Quoted")
+        list_price_col = self._get_header_index(self.hardware_all_headers, "List Price")
 
         # Find a row where Hardware Part is empty, otherwise append
         target_row = None
@@ -2780,6 +3066,14 @@ class CombinedHardwareWidget(QWidget):
             row_values[finish_col] = data["finish"]
         if category_col is not None:
             row_values[category_col] = data["category"]
+        if list_price_col is not None and data.get("list_price") is not None:
+            row_values[list_price_col] = f"${data['list_price']:,.2f}"
+        # Store configurator metadata
+        if self.hardware_config_data_col_idx is not None:
+            row_values[self.hardware_config_data_col_idx] = json.dumps({
+                "family_id": data["family_id"],
+                "selections": data["selections"],
+            })
 
         for c, value in enumerate(row_values):
             if c >= len(self.hardware_all_headers):
@@ -2789,11 +3083,11 @@ class CombinedHardwareWidget(QWidget):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(Qt.CheckState.Unchecked)
                 item.setText("")
-            elif self.hardware_part_id_col_idx is not None and c == self.hardware_part_id_col_idx:
+            elif c in (self.hardware_part_id_col_idx, self.hardware_config_data_col_idx):
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 item.setBackground(QColor(60, 60, 60))
                 item.setForeground(QColor(200, 200, 200))
-                if not item.text().strip():
+                if c == self.hardware_part_id_col_idx and not item.text().strip():
                     item.setText(self._generate_part_id())
             else:
                 item.setFlags(
@@ -2811,7 +3105,11 @@ class CombinedHardwareWidget(QWidget):
         checkbox_item.setText("")
         table.setItem(target_row, 0, checkbox_item)
 
+        # Lock the row since it was created by the configurator
+        self._lock_configured_row(target_row)
+
         table.blockSignals(False)
+        self._recalculate_material_cost(target_row)
         self.on_hardware_table_changed(checkbox_item)
         self.changes_made = True
 

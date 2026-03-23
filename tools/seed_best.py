@@ -79,12 +79,17 @@ def _seed_45h(conn):
         ("N",   "N - N-Design"),
         ("S",   "S - S-Design"),
         ("W",   "W - W-Design"),
+        ("V",   "V - V-Design (Vandlgard)"),
+        ("R",   "R - R-Design (Return)"),
+        ("L",   "L - L-Design (Decorative)"),
     ]
     options(conn, f, "lever", levers)
 
     escutcheons = [
         ("T",  "T - T-Plate (Full Escutcheon)"),
         ("N",  "N - N-Plate (Sectional)"),
+        ("W",  "W - W-Plate (Windsor)"),
+        ("O",  "O - O-Plate (Oval Sectional)"),
     ]
     options(conn, f, "escutcheon", escutcheons)
 
@@ -94,7 +99,11 @@ def _seed_45h(conn):
                ("LHR", "Left Hand Reverse"), ("RHR", "Right Hand Reverse")]
     options(conn, f, "handing", handing)
 
-    thumbturn_options = [("STD", "Standard Thumbturn")]
+    thumbturn_options = [
+        ("STD", "Standard Thumbturn"),
+        ("BVL", "Beveled Thumbturn"),
+        ("ADA", "ADA Compliant Thumbturn"),
+    ]
     options(conn, f, "thumbturn", thumbturn_options)
     tt_funcs = {"45HBA", "45HDA", "45HFA", "45HKA", "45HLA",
                 "45HMA", "45HPA", "45HRA", "45HWA"}

@@ -48,6 +48,9 @@ def _seed_a_series(conn):
         ("TUL","Tulip Knob"),
         ("ORB","Orbit Knob"),
         ("GEO","Georgian Knob"),
+        ("ACC","Accent Lever"),
+        ("MER","Merano Lever"),
+        ("BEL","Bell Knob"),
     ])
 
     options(conn, f, "finish", [
@@ -55,6 +58,10 @@ def _seed_a_series(conn):
         ("605","605 - Bright Brass"),
         ("613","613 - Oil Rubbed Bronze"),
         ("619","619 - Satin Nickel"),
+        ("625","625 - Bright Chrome"),
+        ("609","609 - Antique Brass"),
+        ("612","612 - Satin Bronze"),
+        ("643e","643e - Aged Bronze"),
     ])
 
     # Passage / Privacy don't use keyway
@@ -102,6 +109,8 @@ def _seed_al_series(conn):
         ("MER","Mercury Lever"),
         ("NEP","Neptune Lever"),
         ("OME","Omega Lever"),
+        ("ATH","Athens Lever"),
+        ("RHO","Rhodes Lever"),
     ])
 
     options(conn, f, "finish", [
@@ -110,6 +119,9 @@ def _seed_al_series(conn):
         ("613","613 - Oil Rubbed Bronze"),
         ("619","619 - Satin Nickel"),
         ("643E","643E - Aged Bronze"),
+        ("625","625 - Bright Chrome"),
+        ("612","612 - Satin Bronze"),
+        ("622","622 - Flat Black"),
     ])
 
     for fn in ("10S", "40S", "170"):
@@ -139,6 +151,8 @@ def _seed_b_series(conn):
         ("160N","B160N - Single Cyl + Thumbturn"),
         ("560N","B560N - Single Cyl (Grade 2 Commercial)"),
         ("562N","B562N - Double Cyl (Grade 2 Commercial)"),
+        ("660P","B660P - Single Cyl Thumbturn (Grade 1)"),
+        ("663P","B663P - Classroom Deadbolt (Grade 1)"),
     ])
 
     options(conn, f, "keyway", [
@@ -152,6 +166,10 @@ def _seed_b_series(conn):
         ("605","605 - Bright Brass"),
         ("613","613 - Oil Rubbed Bronze"),
         ("619","619 - Satin Nickel"),
+        ("625","625 - Bright Chrome"),
+        ("609","609 - Antique Brass"),
+        ("612","612 - Satin Bronze"),
+        ("643e","643e - Aged Bronze"),
     ])
 
     for fn in ("80N", "81N"):

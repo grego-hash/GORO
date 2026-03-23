@@ -37,6 +37,8 @@ def _seed_hager_3800(conn):
         ("SQR","August Lever"),
         ("LON","London Lever"),
         ("ARC","Archer Lever"),
+        ("ELN","Elaine Lever"),
+        ("BRN","Barton Lever"),
     ])
 
     options(conn, f, "finish", [
@@ -45,6 +47,9 @@ def _seed_hager_3800(conn):
         ("US10B","US10B - Oil Rubbed Bronze"),
         ("US3",  "US3 - Polished Brass"),
         ("US26", "US26 - Bright Chrome"),
+        ("US4",  "US4 - Satin Brass"),
+        ("US15", "US15 - Satin Nickel"),
+        ("USP",  "USP - Prime Coat"),
     ])
 
 
@@ -73,12 +78,16 @@ def _seed_tell(conn):
     options(conn, f, "lever", [
         ("LX","LX - Standard Lever"),
         ("EX","EX - Economy Lever"),
+        ("DX","DX - Designer Lever"),
+        ("CX","CX - Contour Lever"),
     ])
 
     options(conn, f, "finish", [
         ("26D","26D - Satin Chrome"),
         ("32D","32D - Satin Stainless"),
         ("10B","10B - Oil Rubbed Bronze"),
+        ("US3","US3 - Polished Brass"),
+        ("US15","US15 - Satin Nickel"),
     ])
 
     # ── Tell Guard Commercial Grade 1 Closer ──
@@ -94,6 +103,8 @@ def _seed_tell(conn):
     options(conn, f2, "size", [
         ("1-4","Size 1-4"),
         ("3-6","Size 3-6"),
+        ("1-6","Size 1-6 (Adjustable)"),
+        ("4",  "Size 4"),
     ])
 
     options(conn, f2, "arm", [
@@ -106,4 +117,6 @@ def _seed_tell(conn):
         ("AL","AL - Aluminum"),
         ("DU","DU - Dark Bronze"),
         ("BK","BK - Black"),
+        ("SP","SP - Sprayed Aluminum"),
+        ("SS","SS - Stainless Steel"),
     ])

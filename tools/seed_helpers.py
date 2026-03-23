@@ -47,3 +47,18 @@ def conflict_all(conn, family_id, trigger_slot, trigger_values, target_slot, tar
     for tv in trigger_values:
         for opt in target_options:
             rule(conn, family_id, "conflict", trigger_slot, tv, target_slot, opt[0], desc)
+
+
+def price(conn, family_id, slot_name, slot_value, amount, price_type="base"):
+    """Insert a pricing row (base or adder) for a slot value."""
+    conn.execute("""
+        INSERT OR IGNORE INTO hw_pricing
+            (family_id, slot_name, slot_value, price_type, amount)
+        VALUES (?, ?, ?, ?, ?)
+    """, (family_id, slot_name, slot_value, price_type, amount))
+
+
+def price_bulk(conn, family_id, slot_name, pairs, price_type="base"):
+    """Insert multiple pricing rows: pairs = [(value, amount), ...]."""
+    for val, amt in pairs:
+        price(conn, family_id, slot_name, val, amt, price_type)

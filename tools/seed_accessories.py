@@ -36,6 +36,9 @@ def _seed_ives(conn):
         ("FS439",  "FS439 - Floor Stop, Dome (Cast)"),
         ("RL30",   "RL30 - Roller Latch"),
         ("RL32",   "RL32 - Roller Latch (Heavy Duty)"),
+        ("WS44",   "WS44 - Wall Stop & Holder, Magnetic"),
+        ("WS45",   "WS45 - Wall Stop & Holder, Rigid"),
+        ("FS441",  "FS441 - Floor Stop, Low Profile"),
         ("?"   ,   "Other — Specify in Notes"),
     ]
     options(conn, f, "product_type", products)
@@ -47,6 +50,8 @@ def _seed_ives(conn):
         ("US26",  "US26 - Bright Chrome"),
         ("US26D", "US26D - Satin Chrome"),
         ("US32D", "US32D - Satin Stainless Steel"),
+        ("US15",  "US15 - Satin Nickel"),
+        ("USP",   "USP - Primed for Paint"),
     ]
     options(conn, f, "finish", finishes)
 
@@ -65,6 +70,8 @@ def _seed_ives(conn):
     coordinators = [
         ("COR50",  "COR50 - Standard Series Coordinator"),
         ("COR60",  "COR60 - Heavy-Duty Coordinator"),
+        ("COR65",  "COR65 - Heavy-Duty (Wide Frame)"),
+        ("COR70",  "COR70 - Extra Heavy-Duty Coordinator"),
     ]
     options(conn, f2, "coordinator", coordinators)
 
@@ -77,8 +84,12 @@ def _seed_ives(conn):
     options(conn, f2, "size", sizes)
 
     coord_finishes = [
-        ("US28", "US28 - Satin Aluminum"),
-        ("SP28", "SP28 - Sprayed Aluminum"),
+        ("US28",  "US28 - Satin Aluminum"),
+        ("SP28",  "SP28 - Sprayed Aluminum"),
+        ("DU",    "DU - Dark Bronze"),
+        ("SP313", "SP313 - Sprayed Dark Bronze"),
+        ("US32D", "US32D - Satin Stainless Steel"),
+        ("US3",   "US3 - Polished Brass"),
     ]
     options(conn, f2, "finish", coord_finishes)
 
@@ -96,6 +107,8 @@ def _seed_ives(conn):
         ("SR64",   "SR64 - Screw-In Silencer (Metal Door)"),
         ("SR65",   "SR65 - Drive-In Silencer (Wood Door)"),
         ("FB61T",  "FB61T - Flat Bumper"),
+        ("SR66",   "SR66 - Screw-In Silencer (Extra Quiet)"),
+        ("FB60",   "FB60 - Round Bumper (Self-Adhesive)"),
     ]
     options(conn, f3, "silencer", silencers)
 
@@ -118,6 +131,7 @@ def _seed_hager_hinges(conn):
     slot(conn, f, 3, "finish",      "Finish",         1)
     slot(conn, f, 4, "corners",     "Corners",        0)
     slot(conn, f, 5, "nrp",         "Non-Removable Pin", 0)
+    slot(conn, f, 6, "etw",         "Electric Through-Wire (ETW)", 0)
 
     hinges = [
         ("BB1168",  "BB1168 - Full Mortise, 5-Knuckle, Ball Bearing (Standard Weight)"),
@@ -126,6 +140,8 @@ def _seed_hager_hinges(conn):
         ("RC1842",  "RC1842 - Full Mortise, 5-Knuckle, Ball Bearing (Residential)"),
         ("1250",    "1250 - Full Mortise, 5-Knuckle, Plain Bearing"),
         ("1279",    "1279 - Full Mortise, 5-Knuckle, Plain Bearing (Heavy)"),
+        ("BB1199",  "BB1199 - Full Mortise, 5-Knuckle, Ball Bearing (Architectural)"),
+        ("WT1279",  "WT1279 - Full Mortise, 5-Knuckle, Heavy Weight (Wide Throw)"),
     ]
     options(conn, f, "hinge_type", hinges)
 
@@ -163,6 +179,14 @@ def _seed_hager_hinges(conn):
     ]
     options(conn, f, "nrp", nrp)
 
+    etw = [
+        ("NONE", "None (Standard Hinge)"),
+        ("4W",   "ETW - 4 Wire"),
+        ("8W",   "ETW - 8 Wire"),
+        ("12W",  "ETW - 12 Wire"),
+    ]
+    options(conn, f, "etw", etw)
+
     # ── Swing Clear Hinges ──
     f2 = fid(conn,
              "Hager",
@@ -199,6 +223,8 @@ def _seed_hager_hinges(conn):
         ("780-110", "780-110 - Concealed Leaf, Full Surface"),
         ("780-112", "780-112 - Concealed Leaf, Half Surface"),
         ("780-224", "780-224 - Heavy-Duty Full Surface"),
+        ("780-157", "780-157 - Full Mortise, Concealed Leaf"),
+        ("780-210", "780-210 - Full Surface, Wide Throw"),
     ]
     options(conn, f3, "hinge_type", cont_hinges)
 
@@ -218,6 +244,8 @@ def _seed_hager_hinges(conn):
         ("DKB",   "DKB - Dark Bronze Anodized"),
         ("BLK",   "BLK - Black Anodized"),
         ("USP",   "USP - Prime Coat"),
+        ("SS",    "SS - Stainless Steel"),
+        ("GLD",   "GLD - Gold Anodized"),
     ]
     options(conn, f3, "finish", cont_finishes)
 
@@ -247,6 +275,9 @@ def _seed_pemko(conn):
         ("150B",  "150B - Bumper Threshold, Rubber Insert"),
         ("152B",  "152B - Bumper Threshold, 1/2\" Height"),
         ("44850", "44850 - ADA Compliant, Offset Saddle"),
+        ("171DT", "171DT - Thermal Break Saddle Threshold"),
+        ("270A",  "270A - Saddle Threshold, Flat Top"),
+        ("172A",  "172A - Saddle Threshold, 3/8\" Rise"),
     ]
     options(conn, f, "threshold_type", thresholds)
 
@@ -263,6 +294,8 @@ def _seed_pemko(conn):
         ("AL",  "AL - Mill Aluminum"),
         ("DK",  "DK - Dark Bronze Anodized"),
         ("BL",  "BL - Black Anodized"),
+        ("SS",  "SS - Stainless Steel"),
+        ("PB",  "PB - Polished Brass"),
     ]
     options(conn, f, "finish", finishes)
 
@@ -284,6 +317,9 @@ def _seed_pemko(conn):
         ("315CN",  "315CN - Auto Door Bottom (Mortised)"),
         ("320CN",  "320CN - Auto Door Bottom (Surface)"),
         ("411ARK", "411ARK - Acoustic Automatic Seal"),
+        ("345CNB", "345CNB - Automatic Door Bottom (Heavy Duty)"),
+        ("18062",  "18062 - Surface-Mount Brush Sweep (Heavy Duty)"),
+        ("18063",  "18063 - Surface-Mount Brush Sweep (Extra Long)"),
     ]
     options(conn, f2, "sweep_type", sweeps)
     options(conn, f2, "size", sizes)
@@ -304,6 +340,9 @@ def _seed_pemko(conn):
         ("S773",   "S773 - Surface-Mount Smoke Seal (Adhesive)"),
         ("303AS",  "303AS - Kerf-In Silicone Seal"),
         ("2848",   "2848 - Surface-Mount Pile Weatherstrip"),
+        ("S88D",   "S88D - Smoke & Sound Seal (High Performance)"),
+        ("319AS",  "319AS - Kerf-In Neoprene Seal"),
+        ("S767",   "S767 - Adhesive Smoke Seal (Intumescent)"),
     ]
     options(conn, f3, "gasket_type", gaskets)
 

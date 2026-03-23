@@ -58,6 +58,8 @@ def _seed_co_series(conn):
         ("LAT",   "LAT - Latitude Lever"),
         ("BRW",   "BRW - Broadway Lever"),
         ("NEP",   "NEP - Neptune Lever"),
+        ("TLR",   "TLR - Tubular Return Lever"),
+        ("MER",   "MER - Merano Lever"),
     ]
     options(conn, f, "lever", levers)
 
@@ -67,6 +69,9 @@ def _seed_co_series(conn):
         ("605", "605 - Bright Brass"),
         ("612", "612 - Satin Bronze"),
         ("619", "619 - Satin Nickel"),
+        ("625", "625 - Bright Chrome"),
+        ("613", "613 - Oil Rubbed Bronze"),
+        ("622", "622 - Flat Black"),
     ]
     options(conn, f, "finish", finishes)
 
@@ -141,6 +146,8 @@ def _seed_nde(conn):
         ("LAT", "LAT - Latitude"),
         ("BRW", "BRW - Broadway"),
         ("NEP", "NEP - Neptune"),
+        ("TLR", "TLR - Tubular Return"),
+        ("MER", "MER - Merano"),
     ]
     options(conn, f, "lever", levers)
 
@@ -148,6 +155,16 @@ def _seed_nde(conn):
         ("626", "626 - Satin Chrome"),
         ("643E","643E - Aged Bronze"),
         ("619", "619 - Satin Nickel"),
+        ("605", "605 - Bright Brass"),
+        ("612", "612 - Satin Bronze"),
+        ("625", "625 - Bright Chrome"),
+        ("613", "613 - Oil Rubbed Bronze"),
+        ("622", "622 - Flat Black"),
+        ("605", "605 - Bright Brass"),
+        ("612", "612 - Satin Bronze"),
+        ("625", "625 - Bright Chrome"),
+        ("613", "613 - Oil Rubbed Bronze"),
+        ("622", "622 - Flat Black"),
     ]
     options(conn, f, "finish", finishes)
 
@@ -176,18 +193,23 @@ def _seed_control(conn):
     options(conn, f, "model", [
         ("BE467", "BE467 - Deadbolt"),
         ("FE410", "FE410 - Lever"),
+        ("BE489", "BE489 - Smart Deadbolt (WiFi)"),
     ])
 
     options(conn, f, "style", [
         ("CEN", "CEN - Century Trim"),
         ("LAT", "LAT - Latitude Lever"),
         ("BRW", "BRW - Broadway Lever"),
+        ("GRW", "GRW - Greenwich Trim"),
+        ("CAM", "CAM - Camelot Trim"),
     ])
 
     options(conn, f, "finish", [
         ("626", "626 - Satin Chrome"),
         ("619", "619 - Satin Nickel"),
         ("643E","643E - Aged Bronze"),
+        ("622", "622 - Flat Black"),
+        ("625", "625 - Bright Chrome"),
     ])
 
     # Deadbolt only gets trim style, not lever

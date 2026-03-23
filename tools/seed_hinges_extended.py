@@ -146,6 +146,7 @@ def _seed_ives_hinges(conn):
     slot(conn, f, 2, "finish",  "Finish",            1)
     slot(conn, f, 3, "nrp",     "NRP",               0)
     slot(conn, f, 4, "corners", "Corner Type",       1)
+    slot(conn, f, 5, "etw",     "Electric Through-Wire (ETW)", 0)
 
     sizes = [
         ("3.5x3.5", "3-1/2\" x 3-1/2\""),
@@ -164,11 +165,19 @@ def _seed_ives_hinges(conn):
         ("US3",  "US3 - Polished Brass"),
         ("US4",  "US4 - Satin Brass"),
         ("P",    "P - Primed for Paint"),
+        ("US26", "US26 - Polished Chrome"),
+        ("US15", "US15 - Satin Nickel"),
     ]
     options(conn, f, "finish", ives_finishes)
 
     options(conn, f, "nrp", [("NO","No"),("NRP","NRP - Non-Removable Pin")])
     options(conn, f, "corners", [("SQ","Square"),("RAD","5/8\" Radius")])
+    options(conn, f, "etw", [
+        ("NONE","None (Standard Hinge)"),
+        ("4W",  "ETW - 4 Wire"),
+        ("8W",  "ETW - 8 Wire"),
+        ("12W", "ETW - 12 Wire"),
+    ])
 
     # ── Ives Pivots ──
     f2 = fid(conn, "Ives", "7200 Series Pivot",
@@ -185,11 +194,15 @@ def _seed_ives_hinges(conn):
         ("7215",  "7215 - Offset Pivot Set, Intermediate"),
         ("7236",  "7236 - Offset Pivot Set, Floor Plate"),
         ("7255",  "7255 - Center Hung Pivot Set"),
+        ("7250",  "7250 - Center Hung Pivot Set (Heavy Duty)"),
     ])
     options(conn, f2, "finish", [
         ("US26D","US26D - Satin Chrome"),
         ("US28", "US28 - Satin Aluminum"),
         ("US32D","US32D - Satin Stainless"),
+        ("US10B","US10B - Oil Rubbed Bronze"),
+        ("US3",  "US3 - Polished Brass"),
+        ("P",    "P - Primed for Paint"),
     ])
     options(conn, f2, "handing", [("LH","Left Hand"),("RH","Right Hand")])
 
@@ -210,13 +223,20 @@ def _seed_ives_hinges(conn):
         ("112XY",  "112XY - Half Mortise"),
     ])
     options(conn, f3, "length", [
-        ("79","79\" (6'-7\")"),("83","83\" (6'-11\")"),
-        ("85","85\" (7'-1\")"),("95","95\" (7'-11\")"),
+        ("79","79\" (6'-7\")"),
+        ("83","83\" (6'-11\")"),
+        ("85","85\" (7'-1\")"),
+        ("95","95\" (7'-11\")"),
+        ("96","96\" (8'-0\")"),
+        ("119","119\" (9'-11\")"),
     ])
     options(conn, f3, "finish", [
         ("CL","CL - Clear Anodized"),
         ("DU","DU - Dark Bronze Anodized"),
         ("BK","BK - Black Anodized"),
+        ("P", "P - Primed for Paint"),
+        ("SS","SS - Stainless Steel"),
+        ("GD","GD - Gold Anodized"),
     ])
 
 

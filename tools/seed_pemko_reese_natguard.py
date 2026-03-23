@@ -34,19 +34,24 @@ def _seed_pemko_ext(conn):
     ])
 
     options(conn, f, "width", [
-        ("28","28\""),("30","30\""),("32","32\""),
-        ("34","34\""),("36","36\""),
+        ("20","20\""),  ("24","24\""),  ("28","28\""),
+        ("30","30\""),  ("32","32\""),  ("34","34\""),
+        ("36","36\""),
     ])
 
     options(conn, f, "height", [
-        ("8","8\""),("10","10\""),("12","12\""),
-        ("16","16\""),("34","34\""),("42","42\""),
+        ("6","6\""),("8","8\""),("10","10\""),("12","12\""),
+        ("16","16\""),("18","18\""),("24","24\""),
+        ("34","34\""),("42","42\""),
     ])
 
     options(conn, f, "finish", [
         ("630","630 - Satin Stainless"),
         ("652","652 - Satin Aluminum"),
         ("613","613 - Oil Rubbed Bronze"),
+        ("605","605 - Bright Brass"),
+        ("622","622 - Flat Black"),
+        ("313","313 - Dark Bronze"),
     ])
 
     # ── Astragals ──
@@ -64,10 +69,13 @@ def _seed_pemko_ext(conn):
         ("357","357 - Meeting Stile Astragal"),
         ("399","399 - Fire-Rated Astragal"),
         ("553","553 - Split Astragal (Adjustable)"),
+        ("354","354 - Beveled Astragal"),
+        ("558","558 - Adjustable Split Astragal (Fire Rated)"),
     ])
 
     options(conn, f2, "length", [
-        ("79","79\""),("83","83\""),("85","85\""),("95","95\""),
+        ("79","79\""),  ("83","83\""),  ("84","84\" (7'-0\")"),
+        ("85","85\""),  ("95","95\""),  ("96","96\" (8'-0\")"),
     ])
 
     options(conn, f2, "finish", [
@@ -75,6 +83,8 @@ def _seed_pemko_ext(conn):
         ("CLR","CLR - Clear Anodized"),
         ("DK","DK - Dark Bronze Anodized"),
         ("SS","SS - Stainless Steel"),
+        ("BK","BK - Black Anodized"),
+        ("PB","PB - Polished Brass"),
     ])
 
     # ── Coordinators ──
@@ -97,6 +107,10 @@ def _seed_pemko_ext(conn):
     options(conn, f3, "finish", [
         ("AL","AL - Aluminum"),
         ("DU","DU - Dark Bronze"),
+        ("SS","SS - Stainless Steel"),
+        ("BK","BK - Black"),
+        ("PB","PB - Polished Brass"),
+        ("DBA","DBA - Dark Bronze Anodized"),
     ])
 
 

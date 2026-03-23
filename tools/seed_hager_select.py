@@ -41,6 +41,8 @@ def _seed_hager_3500(conn):
         ("IC",   "IC Core Prep"),
         ("SFIC", "SFIC - Small Format IC"),
         ("FSIC", "FSIC - Full Size IC"),
+        ("COMB", "Combination (IC/Conventional)"),
+        ("KYKL", "Keyless (Thumbturn / Privacy)"),
     ]
     options(conn, f, "cylinder_type", cyls)
 
@@ -50,12 +52,16 @@ def _seed_hager_3500(conn):
         ("BRN",  "Barton Lever"),
         ("AUG",  "August Lever"),
         ("ELN",  "Elaine Lever"),
+        ("LON",  "London Lever"),
+        ("CHS",  "Chester Lever"),
     ]
     options(conn, f, "lever", levers)
 
     options(conn, f, "rose", [
         ("RND",  "Round Rose"),
         ("SQ",   "Square Rose"),
+        ("OVL",  "Oval Rose"),
+        ("SEC",  "Sectional Rose"),
     ])
 
     finishes = [
@@ -65,6 +71,8 @@ def _seed_hager_3500(conn):
         ("US3",  "US3 - Polished Brass"),
         ("US26", "US26 - Polished Chrome"),
         ("US4",  "US4 - Satin Brass"),
+        ("US15", "US15 - Satin Nickel"),
+        ("USP",  "USP - Prime Coat"),
     ]
     options(conn, f, "finish", finishes)
 
@@ -104,6 +112,8 @@ def _seed_select(conn):
         ("83",  "83\" (6'-11\")"),
         ("85",  "85\" (7'-1\")"),
         ("95",  "95\" (7'-11\")"),
+        ("96",  "96\" (8'-0\")"),
+        ("119", "119\" (9'-11\")"),
     ]
     options(conn, f, "length", lengths)
 
@@ -112,6 +122,8 @@ def _seed_select(conn):
         ("DU",  "DU - Dark Bronze Anodized"),
         ("BK",  "BK - Black Anodized"),
         ("P",   "P - Primed for Paint"),
+        ("SS",  "SS - Stainless Steel"),
+        ("GD",  "GD - Gold Anodized"),
     ]
     options(conn, f, "finish", finishes)
 

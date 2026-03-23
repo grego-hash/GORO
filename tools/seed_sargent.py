@@ -116,7 +116,11 @@ def _seed_8200(conn):
                ("LHR", "LHR - Left Hand Reverse"), ("RHR", "RHR - Right Hand Reverse")]
     options(conn, f, "handing", handing)
 
-    thumbturn_options = [("STD", "Standard Thumbturn")]
+    thumbturn_options = [
+        ("STD", "Standard Thumbturn"),
+        ("BVL", "Beveled Thumbturn"),
+        ("ADA", "ADA Compliant Thumbturn"),
+    ]
     options(conn, f, "thumbturn", thumbturn_options)
     tt_funcs = {"8246", "8205", "8225", "8245", "8265", "8270", "8271",
                 "8205 LNL", "8270 LNL", "8271 LNL"}
@@ -204,7 +208,10 @@ def _seed_10_line(conn):
     options(conn, f, "lever", levers)
 
     roses = [
-        ("RN", "RN - Standard Rose"),
+        ("RN", "RN - Standard Round Rose"),
+        ("RS", "RS - Square Rose"),
+        ("RC", "RC - Clutch Rose"),
+        ("LE", "LE - Full Escutcheon Plate"),
     ]
     options(conn, f, "rose", roses)
 

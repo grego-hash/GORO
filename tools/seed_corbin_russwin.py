@@ -118,6 +118,8 @@ def _seed_ml2000(conn):
     # ── Thumbturn ──
     thumbturn_options = [
         ("STD", "Standard Thumbturn"),
+        ("ARR", "Arrow / Beveled Thumbturn"),
+        ("SCL", "Sculptured Thumbturn"),
     ]
     options(conn, f, "thumbturn", thumbturn_options)
 
@@ -189,6 +191,9 @@ def _seed_cl3300(conn):
     roses = [
         ("NZD", "NZD - Princeton Rose"),
         ("PZD", "PZD - Pacific Rose"),
+        ("MZD", "MZD - Montrose Rose"),
+        ("RZD", "RZD - Round Rose"),
+        ("SZD", "SZD - Square Rose"),
     ]
     options(conn, f, "rose", roses)
 

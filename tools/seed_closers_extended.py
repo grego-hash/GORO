@@ -5,10 +5,9 @@ from seed_helpers import fid, slot, options, restrict, rule, conflict_all
 
 def seed(conn):
     _seed_rixson(conn)
-    _seed_lcn_1460(conn)
     _seed_glynn_johnson(conn)
     _seed_norton_1600(conn)
-    print("  Rixson + LCN 1460 + Glynn-Johnson + Norton 1600 seeded.")
+    print("  Rixson + Glynn-Johnson + Norton 1600 seeded.")
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -103,6 +102,9 @@ def _seed_lcn_1460(conn):
     slot(conn, f, 3, "size",      "Spring Size",      1)
     slot(conn, f, 4, "finish",    "Finish",           1)
     slot(conn, f, 5, "cover",     "Cover",            0)
+    slot(conn, f, 6, "hold_open", "Hold Open",        0)
+    slot(conn, f, 7, "backcheck", "Backcheck",        0)
+    slot(conn, f, 8, "delay",     "Delayed Action",   0)
 
     arms = [
         ("REG",   "REG - Regular Arm"),
@@ -110,6 +112,8 @@ def _seed_lcn_1460(conn):
         ("HO",    "HO - Hold-Open Arm"),
         ("TBSRT", "TBSRT - Extra-Duty Arm, w/ Thru Bolt"),
         ("EDA",   "EDA - Extra-Duty Arm"),
+        ("PA",    "PA - Parallel Arm"),
+        ("SCUSH", "SCUSH - Spring Cush Arm"),
     ]
     options(conn, f, "arm_type", arms)
 
@@ -117,6 +121,8 @@ def _seed_lcn_1460(conn):
         ("PULL",   "Pull Side (Regular)"),
         ("PUSH",   "Push Side (Top Jamb)"),
         ("PA",     "Parallel Arm"),
+        ("CB",     "Corner Bracket"),
+        ("SOFFIT", "Soffit Mount (Recessed)"),
     ])
 
     options(conn, f, "size", [("1","1"),("2","2"),("3","3"),("4","4"),("5","5"),("6","6")])
@@ -127,10 +133,32 @@ def _seed_lcn_1460(conn):
         ("691",  "691 - Bright Chrome"),
         ("695",  "695 - Satin Brass"),
         ("693",  "693 - Black"),
+        ("696",  "696 - Brass / Bronze Painted"),
+        ("652",  "652 - Satin Aluminum"),
+        ("716",  "716 - Sprayed Aluminum"),
+        ("SP28", "SP28 - Satin Aluminum (Painted)"),
+        ("US32D","US32D - Satin Stainless Steel"),
     ]
     options(conn, f, "finish", finishes)
 
-    options(conn, f, "cover", [("NONE","None"),("COVER","Metal Cover"),("SLIM","Slim Cover")])
+    options(conn, f, "cover", [("NONE","None"),("COVER","Metal Cover"),("SLIM","Slim Cover"),("PLSTC","Plastic Cover")])
+
+    options(conn, f, "hold_open", [
+        ("NONE",   "No Hold Open"),
+        ("FHO",    "Friction Hold Open (Arm-Based)"),
+        ("MHO",    "Magnetic Hold Open"),
+        ("EHO",    "Electronic Hold Open"),
+    ])
+
+    options(conn, f, "backcheck", [
+        ("NONE", "No Backcheck"),
+        ("BC",   "Backcheck (Spring Cushion)"),
+    ])
+
+    options(conn, f, "delay", [
+        ("NONE", "No Delayed Action"),
+        ("DA",   "DA - Delayed Action"),
+    ])
 
 
 # ═════════════════════════════════════════════════════════════════════

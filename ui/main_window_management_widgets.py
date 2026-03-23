@@ -153,6 +153,13 @@ class VendorsWidget(QWidget):
         info_form.addRow("Phone:", self.vendor_phone_field)
         info_form.addRow("Website:", self.vendor_website_field)
         info_form.addRow("Email:", self.vendor_email_field)
+
+        # Price Modifier (multiplier applied to List Price → Material Cost)
+        self.vendor_price_modifier_field = QLineEdit()
+        self.vendor_price_modifier_field.setPlaceholderText("e.g. 0.42  (blank = 1.0 / full list)")
+        self.vendor_price_modifier_field.setMaximumWidth(220)
+        self.vendor_price_modifier_field.textChanged.connect(self.on_vendor_info_changed)
+        info_form.addRow("Price Modifier:", self.vendor_price_modifier_field)
         
         # Vendor Capabilities section
         capabilities_label = QLabel("Vendor Capabilities")
@@ -264,18 +271,22 @@ class VendorsWidget(QWidget):
                                 'phone': row[2].strip(),
                                 'website': row[3].strip(),
                                 'email': row[4].strip(),
-                                'capabilities': {}
+                                'capabilities': {},
+                                'price_modifier': '',
                             }
                             
                             # Load capabilities if present
                             if has_capabilities and len(row) > 5:
-                                # Capabilities stored as comma-separated in column 5
+                                # Capabilities stored as pipe-separated in column 5
                                 capabilities_str = row[5].strip()
                                 if capabilities_str:
                                     for cap in capabilities_str.split('|'):
                                         cap = cap.strip()
                                         if cap:
                                             self.vendors_info[vendor_name]['capabilities'][cap] = True
+                            # Load price modifier if present (column 6)
+                            if len(row) > 6:
+                                self.vendors_info[vendor_name]['price_modifier'] = row[6].strip()
             except Exception as e:
                 QMessageBox.warning(self, "Load Error", f"Could not load vendors_info.csv:\n{e}")
         
@@ -303,7 +314,7 @@ class VendorsWidget(QWidget):
                                 
                                 # Ensure vendor exists in vendors_info
                                 if vendor_name not in self.vendors_info:
-                                    self.vendors_info[vendor_name] = {'address': '', 'phone': '', 'website': '', 'email': '', 'capabilities': {}}
+                                    self.vendors_info[vendor_name] = {'address': '', 'phone': '', 'website': '', 'email': '', 'capabilities': {}, 'price_modifier': ''}
             except Exception as e:
                 QMessageBox.warning(self, "Load Error", f"Could not load vendors_contacts.csv:\n{e}")
         
@@ -337,7 +348,7 @@ class VendorsWidget(QWidget):
                 QMessageBox.warning(self, "Duplicate Vendor", f"Vendor '{vendor_name}' already exists.")
                 return
             
-            self.vendors_info[vendor_name] = {'address': '', 'phone': '', 'website': '', 'email': '', 'capabilities': {}}
+            self.vendors_info[vendor_name] = {'address': '', 'phone': '', 'website': '', 'email': '', 'capabilities': {}, 'price_modifier': ''}
             self.vendors_contacts[vendor_name] = []
             self.populate_vendors_list()
             
@@ -393,22 +404,25 @@ class VendorsWidget(QWidget):
         self.vendor_name_field.blockSignals(False)
         
         # Load vendor information
-        vendor_info = self.vendors_info.get(self.current_vendor, {'address': '', 'phone': '', 'website': '', 'email': '', 'capabilities': {}})
+        vendor_info = self.vendors_info.get(self.current_vendor, {'address': '', 'phone': '', 'website': '', 'email': '', 'capabilities': {}, 'price_modifier': ''})
         
         self.vendor_address_field.blockSignals(True)
         self.vendor_phone_field.blockSignals(True)
         self.vendor_website_field.blockSignals(True)
         self.vendor_email_field.blockSignals(True)
+        self.vendor_price_modifier_field.blockSignals(True)
         
         self.vendor_address_field.setText(vendor_info.get('address', ''))
         self.vendor_phone_field.setText(vendor_info.get('phone', ''))
         self.vendor_website_field.setText(vendor_info.get('website', ''))
         self.vendor_email_field.setText(vendor_info.get('email', ''))
+        self.vendor_price_modifier_field.setText(vendor_info.get('price_modifier', ''))
         
         self.vendor_address_field.blockSignals(False)
         self.vendor_phone_field.blockSignals(False)
         self.vendor_website_field.blockSignals(False)
         self.vendor_email_field.blockSignals(False)
+        self.vendor_price_modifier_field.blockSignals(False)
         
         # Load capabilities
         capabilities = vendor_info.get('capabilities', {})
@@ -449,16 +463,19 @@ class VendorsWidget(QWidget):
         self.vendor_phone_field.blockSignals(True)
         self.vendor_website_field.blockSignals(True)
         self.vendor_email_field.blockSignals(True)
+        self.vendor_price_modifier_field.blockSignals(True)
         
         self.vendor_address_field.clear()
         self.vendor_phone_field.clear()
         self.vendor_website_field.clear()
         self.vendor_email_field.clear()
+        self.vendor_price_modifier_field.clear()
         
         self.vendor_address_field.blockSignals(False)
         self.vendor_phone_field.blockSignals(False)
         self.vendor_website_field.blockSignals(False)
         self.vendor_email_field.blockSignals(False)
+        self.vendor_price_modifier_field.blockSignals(False)
         
         # Clear capabilities
         for checkbox in self.capability_checkboxes.values():
@@ -516,6 +533,7 @@ class VendorsWidget(QWidget):
         
         # Preserve existing capabilities when updating info
         existing_capabilities = self.vendors_info[self.current_vendor].get('capabilities', {})
+        existing_modifier = self.vendors_info[self.current_vendor].get('price_modifier', '')
         
         # Update vendor information
         self.vendors_info[self.current_vendor] = {
@@ -523,7 +541,8 @@ class VendorsWidget(QWidget):
             'phone': self.vendor_phone_field.text().strip(),
             'website': self.vendor_website_field.text().strip(),
             'email': self.vendor_email_field.text().strip(),
-            'capabilities': existing_capabilities
+            'capabilities': existing_capabilities,
+            'price_modifier': self.vendor_price_modifier_field.text().strip(),
         }
         
         self.changes_made = True
@@ -535,7 +554,7 @@ class VendorsWidget(QWidget):
         
         # Ensure vendor exists in vendors_info
         if self.current_vendor not in self.vendors_info:
-            self.vendors_info[self.current_vendor] = {'address': '', 'phone': '', 'website': '', 'email': '', 'capabilities': {}}
+            self.vendors_info[self.current_vendor] = {'address': '', 'phone': '', 'website': '', 'email': '', 'capabilities': {}, 'price_modifier': ''}
         
         # Update capabilities based on checkboxes
         capabilities = {}
@@ -637,7 +656,7 @@ class VendorsWidget(QWidget):
         
         # Save vendor information with capabilities
         vendors_info_path = self.data_path / "vendors_info.csv"
-        info_rows = [["Vendor Name", "Address", "Phone", "Website", "Email", "Capabilities"]]
+        info_rows = [["Vendor Name", "Address", "Phone", "Website", "Email", "Capabilities", "Price Modifier"]]
         for vendor_name in sorted(self.vendors_info.keys()):
             info = self.vendors_info[vendor_name]
             # Convert capabilities dict to pipe-separated string
@@ -650,7 +669,8 @@ class VendorsWidget(QWidget):
                 info.get('phone', ''),
                 info.get('website', ''),
                 info.get('email', ''),
-                capabilities_str
+                capabilities_str,
+                info.get('price_modifier', ''),
             ])
         
         try:

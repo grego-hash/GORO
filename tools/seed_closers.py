@@ -12,14 +12,19 @@ CLOSER_FINISHES = [
     ("691",  "691 - Dull Bronze Painted (Light)"),
     ("695",  "695 - Gold Painted"),
     ("696",  "696 - Brass / Bronze Painted"),
+    ("652",  "652 - Satin Aluminum"),
+    ("716",  "716 - Sprayed Aluminum"),
+    ("SP28", "SP28 - Satin Aluminum (Painted)"),
+    ("SB",   "SB - Satin Brass"),
+    ("US26D","US26D - Satin Chrome"),
+    ("US32D","US32D - Satin Stainless Steel"),
 ]
 
 
 def seed(conn):
-    _seed_lcn_4040xp(conn)
     _seed_norton_7500(conn)
     _seed_sargent_281(conn)
-    print("  LCN 4040XP + Norton 7500 + Sargent 281 seeded.")
+    print("  Norton 7500 + Sargent 281 seeded.")
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -40,6 +45,8 @@ def _seed_lcn_4040xp(conn):
     slot(conn, f, 4, "size",         "Spring Size",      1)
     slot(conn, f, 5, "cover",        "Cover",            0)
     slot(conn, f, 6, "hold_open",    "Hold Open",        0)
+    slot(conn, f, 7, "backcheck",    "Backcheck",        0)
+    slot(conn, f, 8, "delay",        "Delayed Action",   0)
 
     arm_types = [
         ("REG",   "Regular Arm (Pull Side)"),
@@ -48,6 +55,9 @@ def _seed_lcn_4040xp(conn):
         ("HW",    "Hold-Open Extra Duty Arm"),
         ("SHCUSH","Slim Line Hold Open Cush Arm"),
         ("EDA",   "Extra Duty Arm"),
+        ("SCUSH", "Spring Cush Arm"),
+        ("EDAHO", "Extra Duty Arm w/ Hold-Open"),
+        ("RWPA",  "Regular Arm w/ PA Shoe"),
     ]
     options(conn, f, "arm_type", arm_types)
 
@@ -57,6 +67,8 @@ def _seed_lcn_4040xp(conn):
         ("REG",  "Regular (Hinge Side, Pull)"),
         ("PA",   "Parallel Arm (Push Side)"),
         ("TJ",   "Top Jamb (Push Side)"),
+        ("COR",  "Corner Bracket (Soffit / Reveal)"),
+        ("DB",   "Drop Bracket (Deep Reveal)"),
     ]
     options(conn, f, "mounting", mountings)
 
@@ -82,11 +94,23 @@ def _seed_lcn_4040xp(conn):
         ("NONE",    "No Hold Open"),
         ("FHOSRT",  "Friction Hold Open (Arm-Based)"),
         ("MHOSRT",  "Magnetic Hold Open"),
+        ("EHOSRT",  "Electronic Hold Open (DERA)"),
+        ("SHO",     "Selective Hold Open"),
     ]
     options(conn, f, "hold_open", hold_open)
 
+    options(conn, f, "backcheck", [
+        ("NONE", "No Backcheck"),
+        ("BC",   "Backcheck (Spring Cushion)"),
+    ])
 
-# ═════════════════════════════════════════════════════════════════════
+    options(conn, f, "delay", [
+        ("NONE", "No Delayed Action"),
+        ("DA",   "DA - Delayed Action"),
+    ])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Norton 7500 Series Door Closer
 # ═════════════════════════════════════════════════════════════════════
 
@@ -136,6 +160,7 @@ def _seed_norton_7500(conn):
     covers = [
         ("NONE",  "No Cover"),
         ("METAL", "Metal Cover"),
+        ("PLSTC", "Plastic Cover"),
     ]
     options(conn, f, "cover", covers)
 
@@ -173,6 +198,9 @@ def _seed_sargent_281(conn):
         ("10BE", "10BE - Dark Bronze"),
         ("26D",  "26D - Satin Chrome"),
         ("3",    "3 - Bright Brass"),
+        ("32D",  "32D - Satin Stainless Steel"),
+        ("10B",  "10B - Oil Rubbed Bronze"),
+        ("SP28", "SP28 - Sprayed Aluminum"),
     ]
     options(conn, f, "finish", sar_closer_finishes)
 

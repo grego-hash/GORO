@@ -22,15 +22,22 @@ def _seed_von_duprin_ext(conn):
             "{model}-{style} {trim} {finish}",
             "Von Duprin {model}-{style} Rim Exit {trim} {finish}")
 
-    slot(conn, f, 1, "model",  "Model",       1)
-    slot(conn, f, 2, "style",  "Style",       1)
-    slot(conn, f, 3, "trim",   "Trim",        1)
-    slot(conn, f, 4, "lever",  "Lever",       0)
-    slot(conn, f, 5, "finish", "Finish",      1)
+    slot(conn, f, 1, "model",    "Model",                    1)
+    slot(conn, f, 2, "style",    "Style",                    1)
+    slot(conn, f, 3, "trim",     "Trim",                     1)
+    slot(conn, f, 4, "lever",    "Lever",                    0)
+    slot(conn, f, 5, "finish",   "Finish",                   1)
+    slot(conn, f, 6, "dogging",  "Dogging Option",           0)
+    slot(conn, f, 7, "electric", "Electrified Option",       0)
+    slot(conn, f, 8, "special",  "Special Options (PA/AX)",  0)
 
     options(conn, f, "model", [
-        ("33A","33A - Standard Rim, 3' Doors"),
-        ("35A","35A - Standard Rim, 4' Doors"),
+        ("33A",   "33A - Standard Rim, 3' Doors"),
+        ("35A",   "35A - Standard Rim, 4' Doors"),
+        ("33A-2", "33A-2 - Rim, 3' Doors (Fire Rated)"),
+        ("35A-2", "35A-2 - Rim, 4' Doors (Fire Rated)"),
+        ("33A-4", "33A-4 - Rim, Narrow Stile"),
+        ("35A-4", "35A-4 - Rim, Narrow Stile, 4' Doors"),
     ])
 
     options(conn, f, "style", [
@@ -39,6 +46,8 @@ def _seed_von_duprin_ext(conn):
         ("NL-OP","NL-OP - Night Latch w/ Outside Pull"),
         ("EO", "EO - Exit Only (no trim)"),
         ("TP", "TP - Thumbpiece Outside"),
+        ("CL", "CL - Classroom Function"),
+        ("SR", "SR - Storeroom Function"),
     ])
 
     options(conn, f, "trim", [
@@ -46,11 +55,14 @@ def _seed_von_duprin_ext(conn):
         ("386","386 - Pull Trim"),
         ("389","389 - Escutcheon Lever"),
         ("N/A","No Outside Trim"),
+        ("375","375 - Thumbpiece Trim"),
+        ("387","387 - Pull w/ Thumbpiece"),
     ])
 
     options(conn, f, "lever", [
         ("17","17 Lever"),("06","06 Lever (Knob)"),
         ("15","15 Lever"),("03","03 Lever (Knob Round)"),
+        ("26","26 Lever"),("BRN","BRN - Breakaway Lever"),
     ])
 
     options(conn, f, "finish", [
@@ -58,6 +70,10 @@ def _seed_von_duprin_ext(conn):
         ("626","626 - Satin Chrome"),
         ("313","313 - Dark Bronze"),
         ("710","710 - Black"),
+        ("US3","US3 - Bright Brass"),
+        ("US4","US4 - Satin Brass"),
+        ("US28","US28 - Satin Aluminum"),
+        ("SP28","SP28 - Sprayed Aluminum"),
     ])
 
     # No trim on EO style
@@ -70,6 +86,41 @@ def _seed_von_duprin_ext(conn):
     for st in ("EO","DT"):
         restrict(conn, f, "style", st, "lever", [],
                  f"{st} has no lever")
+
+    # ── Dogging ──
+    options(conn, f, "dogging", [
+        ("STD",  "Standard Dogging (Hex Key)"),
+        ("CD",   "CD - Cylinder Dogging"),
+        ("LD",   "LD - Less Dogging (No Dogging)"),
+    ])
+
+    # Fire-rated models require LD
+    for fm in ("33A-2", "35A-2"):
+        restrict(conn, f, "model", fm, "dogging", ["LD"],
+                 "Fire-rated devices require LD (Less Dogging)")
+
+    # ── Electric Options ──
+    options(conn, f, "electric", [
+        ("NONE",    "Non-Electric"),
+        ("EL",      "EL - Electric Latch Retraction (24VDC)"),
+        ("EL-2",    "EL - Electric Latch Retraction (12VDC)"),
+        ("QEL",     "QEL - Quiet Electric Latch Retraction (24VDC)"),
+        ("QEL-2",   "QEL - Quiet Electric Latch Retraction (12VDC)"),
+        ("RX",      "RX - Request to Exit Switch"),
+        ("LX",      "LX - Latch Bolt Monitor Switch"),
+        ("EL-RX",   "EL + RX"),
+        ("QEL-RX",  "QEL + RX"),
+    ])
+
+    # ── Special Options ──
+    options(conn, f, "special", [
+        ("NONE",   "None"),
+        ("PA",     "PA - Power Assist (ADA Reduced Force)"),
+        ("AX",     "AX - Auxiliary Control (Fire Pin)"),
+        ("PA-AX",  "PA + AX - Power Assist + Auxiliary Control"),
+        ("WS",     "WS - Weather Seal"),
+        ("SS",     "SS - Security Screws"),
+    ])
 
 
 # ═════════════════════════════════════════════════════════════════════
