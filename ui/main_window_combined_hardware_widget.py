@@ -58,6 +58,7 @@ from .main_window_hardware_groups_widget import (
 )
 from .main_window_ui_helpers import QMessageBox
 from .hardware_configurator import HardwareConfiguratorDialog
+from core.hw_configurator_db import match_part_string
 from core.optional_services import HAS_REPORTLAB
 from widgets.table_helpers import ComboBoxDelegate, HardwarePasteEventFilter, NoRowHeaderTable
 
@@ -769,7 +770,7 @@ class CombinedHardwareWidget(QWidget):
 
             vendor_names = sorted(set(filtered_vendors))
             if vendor_names:
-                delegate = ComboBoxDelegate(vendor_names, self.hardware_table)
+                delegate = ComboBoxDelegate([""] + vendor_names, self.hardware_table)
                 self.hardware_table.setItemDelegateForColumn(vendor_col_idx + 1, delegate)
 
         # Set up editable Category dropdown delegate populated from Hardware Auto Labor settings
@@ -781,25 +782,8 @@ class CombinedHardwareWidget(QWidget):
 
         if category_col_idx is not None:
             settings = QSettings(ORG_NAME, APP_NAME)
-            default_hw_map = (
-                "Hinge=0.125\n"
-                "ETW=0.5\n"
-                "Lock=1\n"
-                "Panic=1.5\n"
-                "Cylinder=0.25\n"
-                "Electric strike=1\n"
-                "FlushBolt=0.5\n"
-                "Coordinator=0.5\n"
-                "Closer=0.75\n"
-                "Protection Plate=0.5\n"
-                "Pretection Plate=0.5\n"
-                "Wall/ Floor Stop=0.5\n"
-                "OH Stop=0.75\n"
-                "Smoke seal=0.25\n"
-                "Drop Bottom=0.5\n"
-                "Threshold=0.5\n"
-                "Power Supply=0.25"
-            )
+            from core.constants import DEFAULT_HW_LABOR_MAP
+            default_hw_map = DEFAULT_HW_LABOR_MAP
             hw_map_text = settings.value("labor_hw_map", default_hw_map, type=str)
             categories = []
             for line in hw_map_text.splitlines():
@@ -969,6 +953,7 @@ class CombinedHardwareWidget(QWidget):
         quoted_col = self._get_header_index(self.hardware_all_headers, "quoted")
         vendor_col = self._get_header_index(self.hardware_all_headers, "vendor")
         list_price_col = self._get_header_index(self.hardware_all_headers, "list price")
+        prep_code_col = self._get_header_index(self.hardware_all_headers, "prep code")
         for data_col in range(len(self.hardware_all_headers)):
             table_col = data_col + 1
             item = table.item(row_idx, table_col)
@@ -978,6 +963,9 @@ class CombinedHardwareWidget(QWidget):
             if data_col == quoted_col:
                 continue
             if data_col == vendor_col:
+                continue
+            # Prep Code stays editable on configured rows
+            if data_col == prep_code_col:
                 continue
             # Keep calculated / internal columns as-is
             if data_col in (self.hardware_part_id_col_idx, self.hardware_count_col_idx, self.hardware_config_data_col_idx):
@@ -1016,6 +1004,14 @@ class CombinedHardwareWidget(QWidget):
     def _on_hardware_cell_double_clicked(self, row: int, column: int):
         """Re-launch configurator when user double-clicks a configured row."""
         if not self._is_row_configured(row):
+            return
+        # Let delegate-managed columns (vendor, prep code, category) keep
+        # their normal dropdown behaviour instead of launching the editor.
+        data_col = column - 1  # table column 0 is the checkbox
+        vendor_col = self._get_header_index(self.hardware_all_headers, "vendor")
+        prep_code_col = self._get_header_index(self.hardware_all_headers, "prep code")
+        category_col = self._get_header_index(self.hardware_all_headers, "category")
+        if data_col in (vendor_col, prep_code_col, category_col):
             return
         cfg = self._get_row_config_data(row)
         if cfg is None:
@@ -1077,6 +1073,160 @@ class CombinedHardwareWidget(QWidget):
         self._recalculate_material_cost(row_idx)
         self.on_hardware_table_changed(table.item(row_idx, 0))
         self.changes_made = True
+
+    # ------------------------------------------------------------------
+    # Auto-configure from free-text part string
+    # ------------------------------------------------------------------
+
+    def _auto_configure_from_text(self, row: int):
+        """Read the part text from a non-configured row, try to match it
+        against the configurator database, and open the configurator
+        pre-populated with the best match."""
+        part_col = self._get_hardware_part_col_idx()
+        if part_col is None:
+            return
+        item = self.hardware_table.item(row, part_col + 1)
+        if not item:
+            return
+        part_text = item.text().strip()
+        if not part_text:
+            return
+
+        # Also grab the MFR cell to help narrow results
+        mfr_col = self._get_header_index(self.hardware_all_headers, "MFR")
+        mfr_text = ""
+        if mfr_col is not None:
+            mfr_item = self.hardware_table.item(row, mfr_col + 1)
+            if mfr_item:
+                mfr_text = mfr_item.text().strip()
+
+        # Combine MFR + part text if MFR exists (helps matching)
+        search_text = f"{mfr_text} {part_text}".strip() if mfr_text else part_text
+
+        candidates = match_part_string(search_text)
+
+        # If MFR text was provided, boost candidates whose manufacturer matches
+        if mfr_text and candidates:
+            mfr_upper = mfr_text.upper()
+            for c in candidates:
+                if mfr_upper in c["manufacturer"].upper():
+                    c["score"] += 0.5
+            candidates.sort(key=lambda c: c["score"], reverse=True)
+
+        if not candidates:
+            # No match — open a blank configurator
+            QMessageBox.information(
+                self,
+                "Auto-Configure",
+                f"No matching product found for \"{part_text}\".\n\n"
+                "Opening the configurator so you can configure it manually.",
+            )
+            dlg = HardwareConfiguratorDialog(self)
+        elif len(candidates) == 1 or candidates[0]["score"] >= 0.6:
+            best = candidates[0]
+            dlg = HardwareConfiguratorDialog(
+                self,
+                edit_family_id=best["family_id"],
+                edit_selections=best["selections"],
+            )
+        else:
+            # Multiple weak matches — let user pick from top candidates
+            top = candidates[:8]
+            items_list = [
+                f"{c['manufacturer']} — {c['name']}  (score: {c['score']:.0%})"
+                for c in top
+            ]
+            chosen, ok = QInputDialog.getItem(
+                self,
+                "Auto-Configure — Select Product",
+                f"Multiple possible matches for \"{part_text}\".\n"
+                "Select the best match:",
+                items_list,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            idx = items_list.index(chosen)
+            pick = top[idx]
+            dlg = HardwareConfiguratorDialog(
+                self,
+                edit_family_id=pick["family_id"],
+                edit_selections=pick["selections"],
+            )
+
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.result_data:
+            return
+
+        # Apply the result to the existing row (update in place)
+        data = dlg.result_data
+        table = self.hardware_table
+        table.blockSignals(True)
+
+        mfr_hdr_col = self._get_header_index(self.hardware_all_headers, "MFR")
+        finish_col = self._get_header_index(self.hardware_all_headers, "FINISH")
+        if finish_col is None:
+            finish_col = self._get_header_index(self.hardware_all_headers, "Finish")
+        category_col = self._get_header_index(self.hardware_all_headers, "Category")
+        list_price_col = self._get_header_index(self.hardware_all_headers, "List Price")
+
+        mapping = {
+            mfr_hdr_col: data["manufacturer"],
+            part_col: data["part_number"],
+            finish_col: data["finish"],
+            category_col: data["category"],
+        }
+        if list_price_col is not None and data.get("list_price") is not None:
+            mapping[list_price_col] = f"${data['list_price']:,.2f}"
+
+        # Auto-fill prep code from category
+        prep_code_col = self._get_header_index(self.hardware_all_headers, "Prep Code")
+        if prep_code_col is not None:
+            from core.prep_codes import PrepCodeDB
+            pdb = PrepCodeDB.load_default()
+            default_prep = pdb.default_prep_for_category(
+                data.get("category", ""), data.get("part_number", "")
+            )
+            if default_prep:
+                mapping[prep_code_col] = default_prep
+
+        for col_idx, value in mapping.items():
+            if col_idx is None:
+                continue
+            tbl_col = col_idx + 1  # +1 for checkbox column
+            existing = table.item(row, tbl_col)
+            if existing is not None:
+                existing.setText(str(value) if value else "")
+            else:
+                new_item = QTableWidgetItem(str(value) if value else "")
+                table.setItem(row, tbl_col, new_item)
+
+        # Store configurator metadata
+        if self.hardware_config_data_col_idx is not None:
+            cfg_col = self.hardware_config_data_col_idx + 1
+            cfg_item = table.item(row, cfg_col)
+            cfg_text = json.dumps({
+                "family_id": data["family_id"],
+                "selections": data["selections"],
+            })
+            if cfg_item is not None:
+                cfg_item.setText(cfg_text)
+            else:
+                new_item = QTableWidgetItem(cfg_text)
+                new_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                table.setItem(row, cfg_col, new_item)
+
+        self._lock_configured_row(row)
+        table.blockSignals(False)
+        self._recalculate_material_cost(row)
+        self.on_hardware_table_changed(table.item(row, 0))
+        self.changes_made = True
+
+        QMessageBox.information(
+            self,
+            "Auto-Configure",
+            f"Configured as '{data['part_number']}' ({data['manufacturer']}).",
+        )
 
     # ------------------------------------------------------------------
     # Material Cost auto-calculation
@@ -1555,10 +1705,18 @@ class CombinedHardwareWidget(QWidget):
         # Configurator actions for configured rows
         modify_action = None
         unlock_action = None
+        auto_configure_action = None
         if is_configured:
             modify_action = menu.addAction("Modify in Configurator")
             unlock_action = menu.addAction("Unlock Row (Manual Edit)")
             menu.addSeparator()
+        else:
+            # For non-configured rows, offer auto-configure if a part number exists
+            part_col = self._get_hardware_part_col_idx()
+            part_item = self.hardware_table.item(row, part_col + 1) if part_col is not None else None
+            if part_item and part_item.text().strip():
+                auto_configure_action = menu.addAction("Auto-Configure Part")
+                menu.addSeparator()
 
         copy_action = menu.addAction("Copy Row")
         delete_action = menu.addAction("Delete Row")
@@ -1570,7 +1728,10 @@ class CombinedHardwareWidget(QWidget):
         if action is None:
             return
 
-        if action == modify_action:
+        if action == auto_configure_action:
+            self._auto_configure_from_text(row)
+
+        elif action == modify_action:
             cfg = self._get_row_config_data(row)
             if cfg:
                 self._edit_configured_row(row, cfg)
@@ -3066,6 +3227,16 @@ class CombinedHardwareWidget(QWidget):
             row_values[finish_col] = data["finish"]
         if category_col is not None:
             row_values[category_col] = data["category"]
+        # Auto-fill prep code from category
+        prep_code_col = self._get_header_index(self.hardware_all_headers, "Prep Code")
+        if prep_code_col is not None:
+            from core.prep_codes import PrepCodeDB
+            pdb = PrepCodeDB.load_default()
+            default_prep = pdb.default_prep_for_category(
+                data.get("category", ""), data.get("part_number", "")
+            )
+            if default_prep:
+                row_values[prep_code_col] = default_prep
         if list_price_col is not None and data.get("list_price") is not None:
             row_values[list_price_col] = f"${data['list_price']:,.2f}"
         # Store configurator metadata

@@ -1,6 +1,7 @@
 """Hardware Configurator database layer using SQLite."""
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -404,3 +405,324 @@ def get_list_price(family_id: int, selections: Dict[str, str]) -> Optional[float
     if base is None:
         return None
     return base + adder_total
+
+
+# ------------------------------------------------------------------
+# Part-string reverse matching
+# ------------------------------------------------------------------
+
+def _build_option_index(conn, family_id: int) -> Dict[str, List[str]]:
+    """Return {slot_name: [value, ...]} for all options in a family."""
+    rows = conn.execute(
+        "SELECT slot_name, value FROM hw_options WHERE family_id = ? "
+        "ORDER BY slot_name, sort_order",
+        (family_id,),
+    ).fetchall()
+    index: Dict[str, List[str]] = {}
+    for r in rows:
+        index.setdefault(r["slot_name"], []).append(r["value"])
+    return index
+
+
+def _tokenize_pattern(pattern: str) -> list:
+    """Split assembly_pattern into a list of (type, value) tokens.
+
+    Types: 'slot' for {name} placeholders, 'lit' for literal text between them.
+    Adjacent slots with no separator are grouped as ('adjacent', [name1, name2, ...]).
+    """
+    tokens = []
+    pos = 0
+    while pos < len(pattern):
+        brace = pattern.find("{", pos)
+        if brace == -1:
+            tail = pattern[pos:]
+            if tail:
+                tokens.append(("lit", tail))
+            break
+        if brace > pos:
+            tokens.append(("lit", pattern[pos:brace]))
+        end = pattern.index("}", brace)
+        slot_name = pattern[brace + 1 : end]
+        tokens.append(("slot", slot_name))
+        pos = end + 1
+
+    # Merge consecutive 'slot' tokens into 'adjacent' groups
+    merged: list = []
+    for tok in tokens:
+        if tok[0] == "slot":
+            if merged and merged[-1][0] == "adjacent":
+                merged[-1] = ("adjacent", merged[-1][1] + [tok[1]])
+            elif merged and merged[-1][0] == "slot":
+                merged[-1] = ("adjacent", [merged[-1][1], tok[1]])
+            else:
+                merged.append(tok)
+        else:
+            merged.append(tok)
+    return merged
+
+
+def _try_match_family(
+    text: str,
+    pattern: str,
+    option_index: Dict[str, List[str]],
+    slot_names: List[str],
+    required_slots: set,
+    manufacturer: str = "",
+) -> tuple[Dict[str, str], float]:
+    """Attempt to match *text* against a single family.
+
+    Returns (selections, score).  Score is 0.0 if nothing matched.
+    The algorithm:
+      1. Check if literal prefixes from the assembly pattern appear in the text.
+      2. For each slot, check which of its known option values appear in the text.
+      3. For adjacent slots (no separator), try all value combinations.
+      4. Score = (matched_required * 3 + matched_optional) / (total_required * 3 + total_optional)
+    """
+    text_upper = text.upper().strip()
+
+    # Strip manufacturer name from the front if present (users often paste
+    # "Schlage L9080P 06A 626" but the pattern has no manufacturer prefix).
+    if manufacturer:
+        mfr_upper = manufacturer.upper()
+        if text_upper.startswith(mfr_upper):
+            text_upper = text_upper[len(mfr_upper):].strip()
+
+    selections: Dict[str, str] = {}
+
+    tokens = _tokenize_pattern(pattern)
+
+    # Quick-reject: check that literal fragments of the pattern appear in the text
+    for tok_type, tok_val in tokens:
+        if tok_type == "lit":
+            lit_upper = tok_val.strip().upper()
+            if lit_upper and lit_upper not in text_upper:
+                # Allow single-char separators (like "-") to be missing
+                if len(lit_upper) > 1:
+                    return {}, 0.0
+
+    # Build a "remaining" string that we consume as we match tokens
+    remaining = text_upper
+
+    # Strip known literal prefixes from the text for cleaner matching
+    for tok_type, tok_val in tokens:
+        if tok_type == "lit":
+            lit_upper = tok_val.strip().upper()
+            if lit_upper:
+                remaining = remaining.replace(lit_upper, " ", 1)
+
+    # Split remaining into tokens for matching
+    parts = remaining.split()
+
+    # --- Strategy 1: positional token matching using pattern structure ---
+    # Walk through the pattern tokens and try to greedily consume from `parts`
+    part_idx = 0
+    for tok in tokens:
+        if tok[0] == "lit":
+            # Literals were already stripped; skip
+            continue
+        elif tok[0] == "slot":
+            slot_name = tok[1]
+            opts = option_index.get(slot_name, [])
+            opts_upper = {v.upper(): v for v in opts}
+            matched = False
+            # Try at current position, then skip up to 2 unknown tokens
+            for skip in range(min(3, len(parts) - part_idx + 1)):
+                try_idx = part_idx + skip
+                if try_idx >= len(parts):
+                    break
+                # Try multi-word matches first (e.g. "1-1/8")
+                for lookahead in range(min(3, len(parts) - try_idx), 0, -1):
+                    candidate = " ".join(parts[try_idx : try_idx + lookahead])
+                    if candidate in opts_upper:
+                        selections[slot_name] = opts_upper[candidate]
+                        part_idx = try_idx + lookahead
+                        matched = True
+                        break
+                if matched:
+                    break
+                # Try substring match within current part
+                current = parts[try_idx]
+                for ov_upper, ov_orig in sorted(
+                    opts_upper.items(), key=lambda x: len(x[0]), reverse=True
+                ):
+                    if current == ov_upper:
+                        selections[slot_name] = ov_orig
+                        part_idx = try_idx + 1
+                        matched = True
+                        break
+                    if len(ov_upper) >= 2 and (current.startswith(ov_upper) or current.endswith(ov_upper)):
+                        selections[slot_name] = ov_orig
+                        leftover = current.replace(ov_upper, "", 1).strip()
+                        if leftover:
+                            parts[try_idx] = leftover
+                            part_idx = try_idx
+                        else:
+                            part_idx = try_idx + 1
+                        matched = True
+                        break
+                if matched:
+                    break
+        elif tok[0] == "adjacent":
+            adj_slots = tok[1]
+            # For adjacent slots, try at current position and skip up to 2
+            for skip in range(min(3, len(parts) - part_idx + 1)):
+                try_idx = part_idx + skip
+                if try_idx >= len(parts):
+                    break
+                _match_adjacent(adj_slots, parts, try_idx, option_index, selections)
+                if any(sn in selections for sn in adj_slots):
+                    part_idx = try_idx + 1
+                    break
+
+    # --- Strategy 2: fallback scan — find option values anywhere in text ---
+    for slot_name in slot_names:
+        if slot_name in selections:
+            continue
+        opts = option_index.get(slot_name, [])
+        # Sort longest first to prefer more specific matches
+        for opt_val in sorted(opts, key=len, reverse=True):
+            opt_upper = opt_val.upper()
+            # Check if this value appears as a whole word in the original text
+            if re.search(r"(?:^|[\s\-/])(" + re.escape(opt_upper) + r")(?:[\s\-/]|$)", text_upper):
+                selections[slot_name] = opt_val
+                break
+            # Also try matching as a prefix/suffix within any token
+            # (handles concatenated values like "L9080P" containing "L9080")
+            if len(opt_upper) >= 3:
+                for part in text_upper.split():
+                    if len(part) > len(opt_upper) and (part.startswith(opt_upper) or part.endswith(opt_upper)):
+                        selections[slot_name] = opt_val
+                        break
+                if slot_name in selections:
+                    break
+
+    # --- Score ---
+    if not selections:
+        return {}, 0.0
+
+    total_required = len(required_slots) or 1
+    total_optional = max(len(slot_names) - len(required_slots), 1)
+    matched_req = sum(1 for s in required_slots if s in selections)
+    matched_opt = sum(1 for s in selections if s not in required_slots)
+
+    score = (matched_req * 3.0 + matched_opt) / (total_required * 3.0 + total_optional)
+    return selections, score
+
+
+def _match_adjacent(
+    slot_names: List[str],
+    parts: list,
+    start_idx: int,
+    option_index: Dict[str, List[str]],
+    selections: Dict[str, str],
+) -> None:
+    """Try to match adjacent slots that have no separator in the pattern.
+
+    For example, pattern ``{lever}{escutcheon}`` with text token ``06A``
+    should split into lever=06, escutcheon=A.
+    """
+    if start_idx >= len(parts):
+        return
+
+    # Combine the parts that might belong to these adjacent slots
+    combined = parts[start_idx] if start_idx < len(parts) else ""
+    combined_upper = combined.upper()
+
+    if len(slot_names) == 2:
+        s1, s2 = slot_names
+        opts1 = {v.upper(): v for v in option_index.get(s1, [])}
+        opts2 = {v.upper(): v for v in option_index.get(s2, [])}
+
+        # Try every split point
+        for i in range(1, len(combined_upper)):
+            head = combined_upper[:i]
+            tail = combined_upper[i:]
+            if head in opts1 and tail in opts2:
+                selections[s1] = opts1[head]
+                selections[s2] = opts2[tail]
+                return
+
+    # General case: recursive matching for 3+ adjacent slots
+    _match_adjacent_recursive(slot_names, 0, combined_upper, option_index, selections)
+
+
+def _match_adjacent_recursive(
+    slot_names: List[str],
+    idx: int,
+    remaining: str,
+    option_index: Dict[str, List[str]],
+    selections: Dict[str, str],
+) -> bool:
+    if idx == len(slot_names):
+        return remaining == ""
+    sn = slot_names[idx]
+    opts = {v.upper(): v for v in option_index.get(sn, [])}
+    for length in range(len(remaining), 0, -1):
+        head = remaining[:length]
+        if head in opts:
+            selections[sn] = opts[head]
+            if _match_adjacent_recursive(slot_names, idx + 1, remaining[length:], option_index, selections):
+                return True
+            del selections[sn]
+    return False
+
+
+def match_part_string(text: str) -> List[dict]:
+    """Attempt to match a free-text part string to configurator families.
+
+    Returns a list of candidate matches sorted by score (best first).
+    Each entry::
+
+        {
+            "family_id": int,
+            "manufacturer": str,
+            "name": str,
+            "selections": dict[str, str],
+            "score": float,   # 0.0 – 1.0
+        }
+    """
+    if not text or not text.strip():
+        return []
+
+    conn = get_connection()
+    try:
+        families = conn.execute(
+            "SELECT id, manufacturer, name, assembly_pattern "
+            "FROM hw_families"
+        ).fetchall()
+
+        candidates: List[dict] = []
+
+        for fam in families:
+            family_id = fam["id"]
+            pattern = fam["assembly_pattern"]
+            if not pattern:
+                continue
+
+            option_index = _build_option_index(conn, family_id)
+
+            slot_rows = conn.execute(
+                "SELECT slot_name, required FROM hw_slots "
+                "WHERE family_id = ? ORDER BY slot_order",
+                (family_id,),
+            ).fetchall()
+            slot_names = [r["slot_name"] for r in slot_rows]
+            required_slots = {r["slot_name"] for r in slot_rows if r["required"]}
+
+            selections, score = _try_match_family(
+                text, pattern, option_index, slot_names, required_slots,
+                manufacturer=fam["manufacturer"],
+            )
+            if score > 0.0 and selections:
+                candidates.append({
+                    "family_id": family_id,
+                    "manufacturer": fam["manufacturer"],
+                    "name": fam["name"],
+                    "selections": selections,
+                    "score": score,
+                })
+
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        return candidates
+    finally:
+        conn.close()

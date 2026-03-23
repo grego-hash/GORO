@@ -18,15 +18,28 @@ from core.seeded_data import ensure_seeded_csv
 # to the canonical category names used in Prep_Codes.csv.
 _CATEGORY_ALIASES: Dict[str, str] = {
     "hinge": "Hinge",
+    "spring hinge": "Hinge",
+    "hospital hinge": "Hinge",
+    "continuous hinge": "Hinge",
+    "electric hinge": "Hinge",
     "lock": "Locktype",
     "locktype": "Locktype",
     "panic": "Locktype",
+    "mortise lock": "Locktype",
+    "mortise lockset": "Locktype",
+    "cylindrical lock": "Locktype",
+    "cylindrical lockset": "Locktype",
+    "tubular lockset": "Locktype",
+    "exit device": "Locktype",
+    "narrow stile exit device": "Locktype",
     "flushbolt": "Flushbolt",
     "flush bolt": "Flushbolt",
     "oh stop": "Overhead Stop",
     "overhead stop": "Overhead Stop",
+    "overhead stop/holder": "Overhead Stop",
     "drop bottom": "Door Bottom",
     "door bottom": "Door Bottom",
+    "door bottom / sweep": "Door Bottom",
     "hold open": "Hold Open",
     "lever cl": "Lever CL",
     "etw": "Lever CL",
@@ -163,6 +176,52 @@ class PrepCodeDB:
 
     def all_categories(self) -> List[str]:
         return list(self._by_category.keys())
+
+    def default_prep_for_category(self, hw_category: str, part_number: str = "") -> str:
+        """Return a sensible default prep code for a hardware category.
+
+        Uses *part_number* to refine the choice (e.g. hinge size,
+        RIM vs CVR exit device).
+        """
+        cat_lower = hw_category.strip().lower()
+        canonical = _CATEGORY_ALIASES.get(cat_lower, "")
+        if not canonical:
+            return ""
+
+        pn = part_number.upper()
+
+        # Hinge — pick by height (first dimension in "HxW" size)
+        if canonical == "Hinge":
+            if "CONT" in pn or "GEARED" in pn or cat_lower == "continuous hinge":
+                return "HCONT"
+            import re
+            # Match leading height in patterns like "5x4.5", "4.5x4.5", "4x4"
+            m = re.search(r'(\d+(?:\.\d+)?)\s*[Xx]', pn)
+            if m:
+                height = float(m.group(1))
+                if height >= 5.0:
+                    return "H50"
+                if height >= 4.5:
+                    return "H45"
+            return "H45"  # most common default
+
+        # Locktype — refine by subcategory / part number keywords
+        if canonical == "Locktype":
+            if any(k in cat_lower for k in ("exit", "panic")):
+                if "CVR" in pn or "CLB" in pn:
+                    return "LCVR"
+                if "MORTISE" in pn:
+                    return "LMPN"
+                return "LRPN"  # RIM / default panic
+            if "mortise" in cat_lower:
+                return "LMOR"
+            if any(k in cat_lower for k in ("cylindrical", "tubular")):
+                return "LCYL"
+            return ""  # ambiguous — let user pick
+
+        # For other categories just return the first code in that category
+        entries = self._by_category.get(canonical, [])
+        return entries[0].code if entries else ""
 
     def locktype_descriptions(self) -> List[str]:
         """Return Locktype Description values from Prep_Codes.csv.

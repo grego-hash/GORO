@@ -1,15 +1,17 @@
-"""Seed additional Allegion products: Von Duprin 33A/35A, Sargent 8900 Profile,
-Sargent Harmony, Norton 5800 concealed closer."""
+"""Seed additional Allegion products: Sargent 8900 Profile,
+Sargent Harmony, Norton 5800 concealed closer.
+
+Note: Von Duprin 33A/35A shell removed — now handled by
+seed_vonduprin_pricebook.py with full pricing."""
 
 from seed_helpers import fid, slot, options, restrict, rule, conflict_all
 
 
 def seed(conn):
-    _seed_von_duprin_ext(conn)
     _seed_sargent_profile(conn)
     _seed_sargent_harmony(conn)
     _seed_norton_5800(conn)
-    print("  Von Duprin (ext) + Sargent Profile/Harmony + Norton 5800 seeded.")
+    print("  Sargent Profile/Harmony + Norton 5800 seeded.")
 
 
 # ═════════════════════════════════════════════════════════════════════

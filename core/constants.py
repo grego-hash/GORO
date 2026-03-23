@@ -8,7 +8,7 @@ from PyQt6.QtGui import QColor
 
 ORG_NAME = "OropezaApps"
 APP_NAME = "GORO 2.3"
-APP_VERSION = "2.7.5"
+APP_VERSION = "2.7.6"
 APP_ID = "OropezaApps.GORO"
 APP_DISPLAY_NAME = f"GORO {APP_VERSION}"
 
@@ -67,6 +67,56 @@ def accent_text_color(hex_bg: str) -> str:
         return "#ffffff"
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
     return "#000000" if luminance > 150 else "#ffffff"
+
+
+# ── Default hardware-category → labor-hours map ────────────────
+# One entry per line: "Category=Hours".  Used as the default when
+# the user has not yet customised their labor_hw_map QSetting.
+DEFAULT_HW_LABOR_MAP = (
+    "Hinge=0.125\n"
+    "Spring Hinge=0.125\n"
+    "Continuous Hinge=0.25\n"
+    "ETW=0.5\n"
+    "Lock=1\n"
+    "Mortise Lock=1\n"
+    "Cylindrical Lock=0.75\n"
+    "Tubular Lockset=0.75\n"
+    "Deadbolt=0.5\n"
+    "Panic=1.5\n"
+    "Exit Device=1.5\n"
+    "Narrow Stile Exit Device=1.5\n"
+    "Exit Alarm=1.5\n"
+    "Cylinder=0.25\n"
+    "Electric Strike=1\n"
+    "Electromagnetic Lock=1\n"
+    "Electronic Lock=1\n"
+    "Flush Bolt=0.5\n"
+    "Coordinator=0.5\n"
+    "Closer=0.75\n"
+    "Concealed Closer=1\n"
+    "Floor Closer=1.5\n"
+    "Door Closer=0.75\n"
+    "Auto Operator=2\n"
+    "Automatic Operator=2\n"
+    "Protection Plate=0.5\n"
+    "Door Stop=0.25\n"
+    "OH Stop=0.75\n"
+    "Overhead Stop=0.75\n"
+    "Overhead Stop/Holder=0.75\n"
+    "Smoke Seal=0.25\n"
+    "Door Seal / Gasketing=0.25\n"
+    "Seal / Gasket=0.25\n"
+    "Drop Bottom=0.5\n"
+    "Door Bottom / Sweep=0.5\n"
+    "Threshold=0.5\n"
+    "Power Supply=0.25\n"
+    "Push / Pull=0.25\n"
+    "Pivot=0.5\n"
+    "Keypad Lock=1\n"
+    "Access Switch=0.5\n"
+    "Actuator=0.5"
+)
+
 
 
 

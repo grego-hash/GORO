@@ -9,7 +9,8 @@ from PyQt6.QtCore import QDate, QSettings
 from PyQt6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QTextEdit,
-    QColorDialog, QMessageBox, QSlider
+    QColorDialog, QMessageBox, QSlider, QScrollArea, QWidget, QGroupBox,
+    QFrame
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
@@ -112,11 +113,18 @@ class LaborSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Labor Defaults")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(480)
+        self.setMinimumHeight(600)
         self.settings = QSettings(ORG_NAME, APP_NAME)
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
+        outer = QVBoxLayout(self)
+
+        # ── Scrollable content ──────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
 
         def _get_float_setting(key: str, default: float) -> float:
             try:
@@ -124,67 +132,89 @@ class LaborSettingsDialog(QDialog):
             except Exception:
                 return default
 
+        # ── Doors ───────────────────────────────────────────────
+        doors_group = QGroupBox("Doors")
+        doors_form = QFormLayout(doors_group)
         self.door_single_hours_edit = QLineEdit(str(_get_float_setting("labor_doors_single_hours", 1.0)))
         self.door_single_load_edit = QLineEdit(str(_get_float_setting("labor_doors_single_load", 0.25)))
         self.door_pair_hours_edit = QLineEdit(str(_get_float_setting("labor_doors_pair_hours", 2.0)))
         self.door_pair_load_edit = QLineEdit(str(_get_float_setting("labor_doors_pair_load", 0.5)))
+        doors_form.addRow("Single Field Hours:", self.door_single_hours_edit)
+        doors_form.addRow("Single Field Load & Dist:", self.door_single_load_edit)
+        doors_form.addRow("Pair Field Hours:", self.door_pair_hours_edit)
+        doors_form.addRow("Pair Field Load & Dist:", self.door_pair_load_edit)
+        layout.addWidget(doors_group)
 
-        form.addRow("Doors - Single Field Hours:", self.door_single_hours_edit)
-        form.addRow("Doors - Single Field Load & Dist:", self.door_single_load_edit)
-        form.addRow("Doors - Pair Field Hours:", self.door_pair_hours_edit)
-        form.addRow("Doors - Pair Field Load & Dist:", self.door_pair_load_edit)
-
+        # ── Hollow Metal ────────────────────────────────────────
+        hm_group = QGroupBox("Hollow Metal Frames")
+        hm_form = QFormLayout(hm_group)
         self.hm_kd_hours_edit = QLineEdit(str(_get_float_setting("labor_hm_kd_hours", 1.0)))
         self.hm_kd_load_edit = QLineEdit(str(_get_float_setting("labor_hm_kd_load", 0.25)))
         self.hm_welded_hours_edit = QLineEdit(str(_get_float_setting("labor_hm_welded_hours", 3.0)))
         self.hm_welded_load_edit = QLineEdit(str(_get_float_setting("labor_hm_welded_load", 1.0)))
         self.hm_sidelite_add_edit = QLineEdit(str(_get_float_setting("labor_hm_sidelite_per_foot", 0.5)))
+        hm_form.addRow("Knock Down Field Hours:", self.hm_kd_hours_edit)
+        hm_form.addRow("Knock Down Field Load & Dist:", self.hm_kd_load_edit)
+        hm_form.addRow("Welded Field Hours:", self.hm_welded_hours_edit)
+        hm_form.addRow("Welded Field Load & Dist:", self.hm_welded_load_edit)
+        hm_form.addRow("Sidelite Hours per Foot:", self.hm_sidelite_add_edit)
+        layout.addWidget(hm_group)
 
-        form.addRow("HM - Knock Down Field Hours:", self.hm_kd_hours_edit)
-        form.addRow("HM - Knock Down Field Load & Dist:", self.hm_kd_load_edit)
-        form.addRow("HM - Welded Field Hours:", self.hm_welded_hours_edit)
-        form.addRow("HM - Welded Field Load & Dist:", self.hm_welded_load_edit)
-        form.addRow("HM - Sidelite Hours per Foot:", self.hm_sidelite_add_edit)
-
+        # ── Aluminum ────────────────────────────────────────────
+        alum_group = QGroupBox("Aluminum")
+        alum_form = QFormLayout(alum_group)
         self.alum_width_threshold_edit = QLineEdit(str(_get_float_setting("labor_alum_width_threshold", 4.0)))
         self.alum_under_hours_edit = QLineEdit(str(_get_float_setting("labor_alum_under_hours", 1.5)))
         self.alum_over_hours_edit = QLineEdit(str(_get_float_setting("labor_alum_over_hours", 2.0)))
         self.alum_load_edit = QLineEdit(str(_get_float_setting("labor_alum_load", 0.125)))
         self.alum_sidelite_add_edit = QLineEdit(str(_get_float_setting("labor_alum_sidelite_per_foot", 0.5)))
+        alum_form.addRow("Width Threshold (ft):", self.alum_width_threshold_edit)
+        alum_form.addRow("Under Threshold Hours:", self.alum_under_hours_edit)
+        alum_form.addRow("Over Threshold Hours:", self.alum_over_hours_edit)
+        alum_form.addRow("Field Load & Dist:", self.alum_load_edit)
+        alum_form.addRow("Sidelite Hours per Foot:", self.alum_sidelite_add_edit)
+        layout.addWidget(alum_group)
 
-        form.addRow("Aluminum - Width Threshold (ft):", self.alum_width_threshold_edit)
-        form.addRow("Aluminum - Under Threshold Hours:", self.alum_under_hours_edit)
-        form.addRow("Aluminum - Over Threshold Hours:", self.alum_over_hours_edit)
-        form.addRow("Aluminum - Field Load & Dist:", self.alum_load_edit)
-        form.addRow("Aluminum - Sidelite Hours per Foot:", self.alum_sidelite_add_edit)
+        # ── Hardware Categories ─────────────────────────────────
+        hw_group = QGroupBox("Hardware Category Hours")
+        hw_form = QFormLayout(hw_group)
 
-        default_hw_map = (
-            "Hinge=0.125\n"
-            "ETW=0.5\n"
-            "Lock=1\n"
-            "Panic=1.5\n"
-            "Cylinder=0.25\n"
-            "Electric strike=1\n"
-            "FlushBolt=0.5\n"
-            "Coordinator=0.5\n"
-            "Closer=0.75\n"
-            "Protection Plate=0.5\n"
-            "Pretection Plate=0.5\n"
-            "Wall/ Floor Stop=0.5\n"
-            "OH Stop=0.75\n"
-            "Smoke seal=0.25\n"
-            "Drop Bottom=0.5\n"
-            "Threshold=0.5\n"
-            "Power Supply=0.25"
-        )
+        from core.constants import DEFAULT_HW_LABOR_MAP
+        default_hw_map = DEFAULT_HW_LABOR_MAP
         hw_map_value = self.settings.value("labor_hw_map", default_hw_map, type=str)
-        self.hw_map_edit = QTextEdit()
-        self.hw_map_edit.setPlainText(hw_map_value)
-        self.hw_map_edit.setMinimumHeight(120)
-        form.addRow("Hardware Category Hours (one per line: Category=Hours):", self.hw_map_edit)
 
-        layout.addLayout(form)
+        # Parse saved values into a dict
+        saved_map: dict[str, str] = {}
+        for line in hw_map_value.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            sep = "=" if "=" in line else (":" if ":" in line else None)
+            if sep:
+                key, val = line.split(sep, 1)
+                saved_map[key.strip()] = val.strip()
 
+        # Parse default into ordered list of (category, default_hours)
+        default_pairs: list[tuple[str, str]] = []
+        for line in default_hw_map.splitlines():
+            line = line.strip()
+            if "=" in line:
+                k, v = line.split("=", 1)
+                default_pairs.append((k.strip(), v.strip()))
+
+        self._hw_edits: dict[str, QLineEdit] = {}
+        for cat, default_val in default_pairs:
+            edit = QLineEdit(saved_map.get(cat, default_val))
+            edit.setMaximumWidth(80)
+            hw_form.addRow(f"{cat}:", edit)
+            self._hw_edits[cat] = edit
+
+        layout.addWidget(hw_group)
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        # ── Buttons ─────────────────────────────────────────────
         btns = QHBoxLayout()
         btn_save = QPushButton("Save")
         btn_cancel = QPushButton("Cancel")
@@ -193,7 +223,7 @@ class LaborSettingsDialog(QDialog):
         btns.addStretch()
         btns.addWidget(btn_save)
         btns.addWidget(btn_cancel)
-        layout.addLayout(btns)
+        outer.addLayout(btns)
 
     def _save_and_accept(self):
         try:
@@ -202,27 +232,32 @@ class LaborSettingsDialog(QDialog):
             self.settings.setValue("labor_doors_single_load", float(self.door_single_load_edit.text()))
             self.settings.setValue("labor_doors_pair_hours", float(self.door_pair_hours_edit.text()))
             self.settings.setValue("labor_doors_pair_load", float(self.door_pair_load_edit.text()))
-            
+
             # HM labor settings
             self.settings.setValue("labor_hm_kd_hours", float(self.hm_kd_hours_edit.text()))
             self.settings.setValue("labor_hm_kd_load", float(self.hm_kd_load_edit.text()))
             self.settings.setValue("labor_hm_welded_hours", float(self.hm_welded_hours_edit.text()))
             self.settings.setValue("labor_hm_welded_load", float(self.hm_welded_load_edit.text()))
             self.settings.setValue("labor_hm_sidelite_per_foot", float(self.hm_sidelite_add_edit.text()))
-            
+
             # Aluminum labor settings
             self.settings.setValue("labor_alum_width_threshold", float(self.alum_width_threshold_edit.text()))
             self.settings.setValue("labor_alum_under_hours", float(self.alum_under_hours_edit.text()))
             self.settings.setValue("labor_alum_over_hours", float(self.alum_over_hours_edit.text()))
             self.settings.setValue("labor_alum_load", float(self.alum_load_edit.text()))
             self.settings.setValue("labor_alum_sidelite_per_foot", float(self.alum_sidelite_add_edit.text()))
-            
-            # Hardware hours mapping
-            self.settings.setValue("labor_hw_map", self.hw_map_edit.toPlainText())
-            
+
+            # Hardware hours mapping — rebuild from individual fields
+            lines = []
+            for cat, edit in self._hw_edits.items():
+                val = edit.text().strip()
+                if val:
+                    float(val)  # validate
+                    lines.append(f"{cat}={val}")
+            self.settings.setValue("labor_hw_map", "\n".join(lines))
+
             self.accept()
         except ValueError:
-            # Handle invalid numeric input
             QMessageBox.warning(self, "Invalid Input", "Please check that all numeric fields contain valid numbers.")
 
 class CreateBidDialog(QDialog):

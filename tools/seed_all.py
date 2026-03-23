@@ -18,7 +18,7 @@ import seed_corbin_russwin
 import seed_sargent
 import seed_yale
 import seed_best
-import seed_von_duprin
+import seed_vonduprin_pricebook
 import seed_exit_devices
 import seed_closers
 import seed_accessories
@@ -79,6 +79,11 @@ import seed_lcn_high_security
 import seed_lcn_auto_operators
 import seed_lcn_actuators
 
+# Hager Pricebook series (Batch 8)
+import seed_hager_hinges
+import seed_hager_closers
+import seed_hager_exit
+
 
 def main():
     db_path = Path(__file__).resolve().parent.parent / "data" / "hw_configurator.db"
@@ -96,7 +101,7 @@ def main():
         seed_sargent.seed(conn)
         seed_yale.seed(conn)
         seed_best.seed(conn)
-        seed_von_duprin.seed(conn)
+        seed_vonduprin_pricebook.seed(conn)
         seed_exit_devices.seed(conn)
         seed_closers.seed(conn)
         seed_accessories.seed(conn)
@@ -156,6 +161,11 @@ def main():
         seed_lcn_high_security.seed(conn)
         seed_lcn_auto_operators.seed(conn)
         seed_lcn_actuators.seed(conn)
+
+        # Hager Pricebook series (Batch 8)
+        seed_hager_hinges.seed(conn)
+        seed_hager_closers.seed(conn)
+        seed_hager_exit.seed(conn)
 
         conn.commit()
         print("\nAll seed data loaded successfully.")
