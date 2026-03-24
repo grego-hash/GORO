@@ -13069,16 +13069,43 @@ class MainWindow(QMainWindow):
 
         btn_elevations = QPushButton("Door Elevations PDF")
         btn_elevations.setToolTip('Generate scaled elevations at 1/8" = 1\'-0" from this door tab.')
-        btn_elevations.clicked.connect(
-            lambda: self.export_door_elevations_pdf(
-                tab_widget,
-                tables_data,
-                workbook_path,
-                source_door_table=table_widget,
-                source_door_headers=headers,
-                source_door_tab_name=table_name,
-            )
-        )
+
+        def _on_door_elevations_clicked():
+            scope_dlg = QMessageBox(self)
+            scope_dlg.setWindowTitle("Door Elevations Scope")
+            scope_dlg.setText("Generate elevations for which door tabs?")
+            btn_active = scope_dlg.addButton("Active Tab", QMessageBox.ButtonRole.AcceptRole)
+            btn_all = scope_dlg.addButton("All Door Tabs", QMessageBox.ButtonRole.ActionRole)
+            scope_dlg.addButton(QMessageBox.StandardButton.Cancel)
+            scope_dlg.exec()
+            clicked = scope_dlg.clickedButton()
+            if clicked is btn_active:
+                self.export_door_elevations_pdf(
+                    tab_widget,
+                    tables_data,
+                    workbook_path,
+                    source_door_table=table_widget,
+                    source_door_headers=headers,
+                    source_door_tab_name=table_name,
+                )
+            elif clicked is btn_all:
+                all_tabs = []
+                for _w, _csv, _h, _ in tables_data:
+                    _stem = _csv.stem.lower() if hasattr(_csv, "stem") else ""
+                    if "door" in _stem and "schedule" not in _stem:
+                        _tbl = self._extract_table_widget(_w)
+                        if isinstance(_tbl, QTableWidget):
+                            all_tabs.append((_tbl, list(_h), _csv.stem if hasattr(_csv, "stem") else "Doors"))
+                if not all_tabs:
+                    all_tabs = [(table_widget, headers, table_name)]
+                self.export_door_elevations_pdf(
+                    tab_widget,
+                    tables_data,
+                    workbook_path,
+                    all_source_door_tabs=all_tabs,
+                )
+
+        btn_elevations.clicked.connect(_on_door_elevations_clicked)
 
         button_row.addWidget(btn_email)
         button_row.addWidget(btn_elevations)
@@ -13131,16 +13158,43 @@ class MainWindow(QMainWindow):
 
         btn_elevations = QPushButton("Frame Elevations PDF")
         btn_elevations.setToolTip("Generate frame elevation sheets from this frame tab.")
-        btn_elevations.clicked.connect(
-            lambda: self.export_frame_elevations_pdf(
-                tab_widget,
-                tables_data,
-                workbook_path,
-                source_frame_table=table_widget,
-                source_frame_headers=headers,
-                source_frame_tab_name=table_name,
-            )
-        )
+
+        def _on_frame_elevations_clicked():
+            scope_dlg = QMessageBox(self)
+            scope_dlg.setWindowTitle("Frame Elevations Scope")
+            scope_dlg.setText("Generate elevations for which frame tabs?")
+            btn_active = scope_dlg.addButton("Active Tab", QMessageBox.ButtonRole.AcceptRole)
+            btn_all = scope_dlg.addButton("All Frame Tabs", QMessageBox.ButtonRole.ActionRole)
+            scope_dlg.addButton(QMessageBox.StandardButton.Cancel)
+            scope_dlg.exec()
+            clicked = scope_dlg.clickedButton()
+            if clicked is btn_active:
+                self.export_frame_elevations_pdf(
+                    tab_widget,
+                    tables_data,
+                    workbook_path,
+                    source_frame_table=table_widget,
+                    source_frame_headers=headers,
+                    source_frame_tab_name=table_name,
+                )
+            elif clicked is btn_all:
+                all_tabs = []
+                for _w, _csv, _h, _ in tables_data:
+                    _stem = _csv.stem.lower() if hasattr(_csv, "stem") else ""
+                    if "frame" in _stem and "schedule" not in _stem:
+                        _tbl = self._extract_table_widget(_w)
+                        if isinstance(_tbl, QTableWidget):
+                            all_tabs.append((_tbl, list(_h), _csv.stem if hasattr(_csv, "stem") else "Frames"))
+                if not all_tabs:
+                    all_tabs = [(table_widget, headers, table_name)]
+                self.export_frame_elevations_pdf(
+                    tab_widget,
+                    tables_data,
+                    workbook_path,
+                    all_source_frame_tabs=all_tabs,
+                )
+
+        btn_elevations.clicked.connect(_on_frame_elevations_clicked)
 
         button_row.addWidget(btn_email)
         button_row.addWidget(btn_elevations)
@@ -17687,9 +17741,19 @@ class MainWindow(QMainWindow):
                     elif "field load" in h_lower:
                         cost_related_cols.add(idx)
 
-                def recalc_frame_unit_costs_on_change(item, table=tbl, headers=headers, cost_cols=cost_related_cols):
+                # Find the Frame Type column index for auto-pull
+                _frame_type_col_idx = None
+                for idx, h in enumerate(headers):
+                    if h.strip().lower() == "frame type":
+                        _frame_type_col_idx = idx
+                        break
+
+                def recalc_frame_unit_costs_on_change(item, table=tbl, headers=headers, cost_cols=cost_related_cols, ft_col=_frame_type_col_idx, active_path=active_path, tables_data=tables_data):
                     if not item:
                         return
+                    # When Frame Type changes, pull details from the Schedule
+                    if ft_col is not None and item.column() == ft_col:
+                        self._recalculate_frame_formulas_for_row(table, item.row(), headers, active_path, tables_data)
                     if item.column() in cost_cols:
                         self._recalculate_frame_unit_costs_for_row(table, item.row(), headers)
                     else:
@@ -18390,6 +18454,11 @@ class MainWindow(QMainWindow):
                 if not defer_initial_heavy_recalc[0]:
                     self._apply_wood_door_formulas(tbl, headers, csv_data, active_path, tables_data)
                     self._recalculate_door_unit_costs_for_table(tbl, headers)
+
+            # For any frame tab, pull details from the Schedule
+            if "frame" in csv_path.stem.lower():
+                if not defer_initial_heavy_recalc[0]:
+                    self._apply_frame_formulas(tbl, headers, active_path, tables_data)
             
             # No auto-cleanup needed - users can delete rows via right-click context menu
             
@@ -22251,7 +22320,7 @@ class MainWindow(QMainWindow):
                         if "door" in stem_lower and "schedule" not in stem_lower:
                             self._apply_wood_door_formulas(active_table, headers, csv_data, active_path, tables_data)
                         elif "frame" in stem_lower:
-                            self._recalculate_frame_unit_costs_for_table(active_table, headers)
+                            self._apply_frame_formulas(active_table, headers, active_path, tables_data)
 
             # Keep cross-tab calculated fields in sync.
             if hasattr(self, '_schedule_door_costs_callback') and self._schedule_door_costs_callback:
@@ -24508,6 +24577,7 @@ class MainWindow(QMainWindow):
         out_path: Optional[Path] = None,
         prompt_for_path: bool = True,
         show_messages: bool = True,
+        all_source_frame_tabs: Optional[list] = None,
     ) -> Optional[Path]:
         """Generate simple frame elevation PDF sheets from frame-tab data."""
         if not HAS_REPORTLAB or canvas is None:
@@ -24515,80 +24585,23 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Frame Elevations", "ReportLab is required to export frame elevations.")
             return None
 
-        frame_table = source_frame_table
-        frame_headers = source_frame_headers
-        tab_name = (source_frame_tab_name or "").strip() or "Frames"
-        if frame_table is None or frame_headers is None:
+        # Build list of frame tables to process
+        _frame_sources = []
+        if all_source_frame_tabs:
+            _frame_sources = list(all_source_frame_tabs)
+        elif source_frame_table is not None and source_frame_headers is not None:
+            _frame_sources = [(source_frame_table, list(source_frame_headers), (source_frame_tab_name or "").strip() or "Frames")]
+        else:
             if show_messages:
                 QMessageBox.warning(self, "Frame Elevations", "No frame table was provided.")
             return None
 
-        width_idx = self._find_header_idx_aliases(frame_headers, ["Open Width", "Opening Width", "Width"])
-        height_idx = self._find_header_idx_aliases(frame_headers, ["Open Height", "Opening Height", "Height"])
-        jamb_face_idx = self._find_header_idx_aliases(frame_headers, ["Jamb Face"])
-        header_face_idx = self._find_header_idx_aliases(frame_headers, ["Header Face"])
-        face_idx = self._find_header_idx_aliases(frame_headers, ["Face", "Frame Face", "Trim"])
-        frame_type_idx = self._find_header_idx_aliases(frame_headers, ["Frame Type", "FrameType", "Type"])
-        opening_idx = self._find_header_idx_aliases(frame_headers, ["Opening", "Opening #", "Opening Number"])
-        rating_idx = self._find_header_idx_aliases(frame_headers, ["Fire Rating", "Rating", "Rating_Fire"])
-        manufacturer_idx = self._find_header_idx_aliases(frame_headers, ["Manufacturer", "Mfr", "Manufacture"])
-        construction_idx = self._find_header_idx_aliases(frame_headers, ["Construction", "Metal Style", "Mat'l", "Material"])
-        trim_idx = self._find_header_idx_aliases(frame_headers, ["Return", "Frame Return"])
-        finish_idx = self._find_header_idx_aliases(frame_headers, ["Finish", "Frame Finish", "2nd Finish"])
-        count_idx = self._find_header_idx_aliases(frame_headers, ["Count", "Qty", "Quantity"])
-        sidelite_right_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["Sidelite Width", "Sidelite width", "Sidelite", "Sidelite Right", "Sidelite RH"],
-        )
-        sidelite_left_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["2nd Sidelite Width", "2nd sidelite width", "2nd Sidelite", "Sidelite 2", "Sidelite LH"],
-        )
-        sidelite_right_height_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["Sidelite Height", "Sidelite height", "Sidelite RH Height"],
-        )
-        sidelite_left_height_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["2nd Sidelite Height", "2nd sidelite height", "Sidelite LH Height"],
-        )
-        sill_height_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["Sill Height", "Sidelite Sill Height"],
-        )
-        transom_type_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["Transom Type", "Transom"],
-        )
-        transom_height_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["Transom Height"],
-        )
-        header_continuous_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["Header Continuous", "Header Continue?"],
-        )
-        jamb_continuous_idx = self._find_header_idx_aliases(
-            frame_headers,
-            ["Jamb Continuous", "Jamb Continue?"],
-        )
-
-        if width_idx is None or height_idx is None:
+        if not _frame_sources:
             if show_messages:
-                QMessageBox.warning(
-                    self,
-                    "Frame Elevations",
-                    "Required columns were not found. Expected Open Width and Open Height."
-                )
+                QMessageBox.warning(self, "Frame Elevations", "No frame table was provided.")
             return None
 
-        table_col_offset = 1 if frame_table.columnCount() == len(frame_headers) + 1 else 0
-
-        def _cell_text(row_idx: int, header_idx: Optional[int]) -> str:
-            if header_idx is None:
-                return ""
-            item = frame_table.item(row_idx, header_idx + table_col_offset)
-            return item.text().strip() if item else ""
+        tab_name = _frame_sources[0][2] if len(_frame_sources) == 1 else "Frames"
 
         def _normalize_transom_type(raw_value: str) -> str:
             text = str(raw_value or "").strip().lower()
@@ -24602,8 +24615,6 @@ class MainWindow(QMainWindow):
                 return "sidelite_only"
             if text in {"none", "no", "n/a", "na"}:
                 return "none"
-            # Legacy: bare dimensional value (old "Transom width" field like "2", "2-0", "24")
-            # Treat as Full Width with that value as the height.
             if re.match(r'^[\d]', text):
                 return "full_width"
             return "none"
@@ -24613,133 +24624,203 @@ class MainWindow(QMainWindow):
             return text in {"yes", "y", "true", "1", "checked", "x"}
 
         elevations = []
-        for r in range(frame_table.rowCount()):
-            open_width_text = _cell_text(r, width_idx)
-            open_height_text = _cell_text(r, height_idx)
-            jamb_face_text = _cell_text(r, jamb_face_idx) or _cell_text(r, face_idx)
-            header_face_text = _cell_text(r, header_face_idx) or _cell_text(r, face_idx)
-            frame_type_text = _cell_text(r, frame_type_idx)
-            opening_text = _cell_text(r, opening_idx)
-            rating_text = _cell_text(r, rating_idx)
-            manufacturer_text = _cell_text(r, manufacturer_idx)
-            construction_text = _cell_text(r, construction_idx)
-            trim_text = _cell_text(r, trim_idx)
-            finish_text = _cell_text(r, finish_idx)
-            count_text = _cell_text(r, count_idx)
-            sidelite_right_text = _cell_text(r, sidelite_right_idx)
-            sidelite_left_text = _cell_text(r, sidelite_left_idx)
-            sidelite_right_height_text = _cell_text(r, sidelite_right_height_idx)
-            sidelite_left_height_text = _cell_text(r, sidelite_left_height_idx)
-            sill_height_text = _cell_text(r, sill_height_idx)
-            transom_type_text = _cell_text(r, transom_type_idx)
-            transom_height_text = _cell_text(r, transom_height_idx)
-            header_continuous_text = _cell_text(r, header_continuous_idx)
-            jamb_continuous_text = _cell_text(r, jamb_continuous_idx)
+        for frame_table, frame_headers, _cur_tab_name in _frame_sources:
+            _cur_tab_name = _cur_tab_name or tab_name
 
-            if not open_width_text and not open_height_text and not frame_type_text and not opening_text:
+            width_idx = self._find_header_idx_aliases(frame_headers, ["Open Width", "Opening Width", "Width"])
+            height_idx = self._find_header_idx_aliases(frame_headers, ["Open Height", "Opening Height", "Height"])
+            jamb_face_idx = self._find_header_idx_aliases(frame_headers, ["Jamb Face"])
+            header_face_idx = self._find_header_idx_aliases(frame_headers, ["Header Face"])
+            face_idx = self._find_header_idx_aliases(frame_headers, ["Face", "Frame Face", "Trim"])
+            frame_type_idx = self._find_header_idx_aliases(frame_headers, ["Frame Type", "FrameType", "Type"])
+            opening_idx = self._find_header_idx_aliases(frame_headers, ["Opening", "Opening #", "Opening Number"])
+            rating_idx = self._find_header_idx_aliases(frame_headers, ["Fire Rating", "Rating", "Rating_Fire"])
+            manufacturer_idx = self._find_header_idx_aliases(frame_headers, ["Manufacturer", "Mfr", "Manufacture"])
+            construction_idx = self._find_header_idx_aliases(frame_headers, ["Construction", "Metal Style", "Mat'l", "Material"])
+            trim_idx = self._find_header_idx_aliases(frame_headers, ["Return", "Frame Return"])
+            finish_idx = self._find_header_idx_aliases(frame_headers, ["Finish", "Frame Finish", "2nd Finish"])
+            count_idx = self._find_header_idx_aliases(frame_headers, ["Count", "Qty", "Quantity"])
+            vendor_idx = self._find_header_idx_aliases(frame_headers, ["Vendor"])
+            wall_size_idx = self._find_header_idx_aliases(frame_headers, ["Wall Size", "Wall Sizes", "Wall Thickness", "Wall Thick", "WallThick"])
+            sidelite_right_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["Sidelite Width", "Sidelite width", "Sidelite", "Sidelite Right", "Sidelite RH"],
+            )
+            sidelite_left_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["2nd Sidelite Width", "2nd sidelite width", "2nd Sidelite", "Sidelite 2", "Sidelite LH"],
+            )
+            sidelite_right_height_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["Sidelite Height", "Sidelite height", "Sidelite RH Height"],
+            )
+            sidelite_left_height_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["2nd Sidelite Height", "2nd sidelite height", "Sidelite LH Height"],
+            )
+            sill_height_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["Sill Height", "Sidelite Sill Height"],
+            )
+            transom_type_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["Transom Type", "Transom"],
+            )
+            transom_height_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["Transom Height"],
+            )
+            header_continuous_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["Header Continuous", "Header Continue?"],
+            )
+            jamb_continuous_idx = self._find_header_idx_aliases(
+                frame_headers,
+                ["Jamb Continuous", "Jamb Continue?"],
+            )
+
+            if width_idx is None or height_idx is None:
                 continue
 
-            open_width_in = self._parse_hm_inches(open_width_text)
-            open_height_in = self._parse_hm_inches(open_height_text)
-            jamb_face_in = self._parse_hm_inches(jamb_face_text)
-            header_face_in = self._parse_hm_inches(header_face_text)
-            # If one face is blank, use the other for both.
-            if jamb_face_in is None and header_face_in is not None:
-                jamb_face_in = header_face_in
-            elif header_face_in is None and jamb_face_in is not None:
-                header_face_in = jamb_face_in
-            sidelite_right_in = self._parse_feet_default_inches(sidelite_right_text)
-            sidelite_left_in = self._parse_feet_default_inches(sidelite_left_text)
-            sidelite_right_height_in = self._parse_feet_default_inches(sidelite_right_height_text)
-            sidelite_left_height_in = self._parse_feet_default_inches(sidelite_left_height_text)
-            sill_height_in = float(self._parse_hm_inches(sill_height_text) or 0.0)
-            transom_height_in = self._parse_feet_default_inches(transom_height_text)
-            transom_type = _normalize_transom_type(transom_type_text)
-            header_continuous = _parse_boolish(header_continuous_text)
-            jamb_continuous = _parse_boolish(jamb_continuous_text)
+            table_col_offset = 1 if frame_table.columnCount() == len(frame_headers) + 1 else 0
 
-            # Legacy fallback: if Transom Type is a dimensional string (old "Transom width"
-            # field value like "2", "2-0", "24") and no Transom Height was given, use the
-            # Transom Type text as the height (feet-default parsing).
-            if (transom_type == "full_width"
-                    and transom_height_in <= 0.0
-                    and re.match(r'^[\d]', str(transom_type_text or "").strip())):
-                transom_height_in = self._parse_feet_default_inches(transom_type_text)
+            def _cell_text(row_idx: int, header_idx: Optional[int], _ft=frame_table, _tco=table_col_offset) -> str:
+                if header_idx is None:
+                    return ""
+                item = _ft.item(row_idx, header_idx + _tco)
+                return item.text().strip() if item else ""
 
-            if transom_type == "none" or transom_height_in <= 0.0:
-                transom_type = "none"
-                header_continuous = False
-                jamb_continuous = False
+            for r in range(frame_table.rowCount()):
+                open_width_text = _cell_text(r, width_idx)
+                open_height_text = _cell_text(r, height_idx)
+                jamb_face_text = _cell_text(r, jamb_face_idx) or _cell_text(r, face_idx)
+                header_face_text = _cell_text(r, header_face_idx) or _cell_text(r, face_idx)
+                frame_type_text = _cell_text(r, frame_type_idx)
+                opening_text = _cell_text(r, opening_idx)
+                rating_text = _cell_text(r, rating_idx)
+                manufacturer_text = _cell_text(r, manufacturer_idx)
+                construction_text = _cell_text(r, construction_idx)
+                trim_text = _cell_text(r, trim_idx)
+                finish_text = _cell_text(r, finish_idx)
+                count_text = _cell_text(r, count_idx)
+                vendor_text = _cell_text(r, vendor_idx)
+                wall_size_text = _cell_text(r, wall_size_idx)
+                sidelite_right_text = _cell_text(r, sidelite_right_idx)
+                sidelite_left_text = _cell_text(r, sidelite_left_idx)
+                sidelite_right_height_text = _cell_text(r, sidelite_right_height_idx)
+                sidelite_left_height_text = _cell_text(r, sidelite_left_height_idx)
+                sill_height_text = _cell_text(r, sill_height_idx)
+                transom_type_text = _cell_text(r, transom_type_idx)
+                transom_height_text = _cell_text(r, transom_height_idx)
+                header_continuous_text = _cell_text(r, header_continuous_idx)
+                jamb_continuous_text = _cell_text(r, jamb_continuous_idx)
 
-            if jamb_face_in is None and frame_type_text:
-                for pattern in (
-                    r"face\s*[:=]?\s*([0-9]+(?:\s+[0-9]+/[0-9]+|/[0-9]+|\.[0-9]+)?)",
-                    r"([0-9]+(?:\s+[0-9]+/[0-9]+|/[0-9]+|\.[0-9]+)?)\s*(?:\"|in|inch|inches)?\s*face",
-                ):
-                    match = re.search(pattern, frame_type_text, flags=re.IGNORECASE)
-                    if not match:
-                        continue
-                    _parsed = self._parse_hm_inches(match.group(1))
-                    if _parsed is not None:
-                        jamb_face_in = _parsed
-                        header_face_in = _parsed
-                        break
+                if not open_width_text and not open_height_text and not frame_type_text and not opening_text:
+                    continue
 
-            if open_width_in is None or open_height_in is None:
-                continue
+                open_width_in = self._parse_hm_inches(open_width_text)
+                open_height_in = self._parse_hm_inches(open_height_text)
+                blind_frame = (jamb_face_text.strip() == "0" or header_face_text.strip() == "0")
+                jamb_face_in = self._parse_hm_inches(jamb_face_text)
+                header_face_in = self._parse_hm_inches(header_face_text)
+                if jamb_face_in is None and header_face_in is not None:
+                    jamb_face_in = header_face_in
+                elif header_face_in is None and jamb_face_in is not None:
+                    header_face_in = jamb_face_in
+                sidelite_right_in = self._parse_feet_default_inches(sidelite_right_text)
+                sidelite_left_in = self._parse_feet_default_inches(sidelite_left_text)
+                sidelite_right_height_in = self._parse_feet_default_inches(sidelite_right_height_text)
+                sidelite_left_height_in = self._parse_feet_default_inches(sidelite_left_height_text)
+                sill_height_in = float(self._parse_hm_inches(sill_height_text) or 0.0)
+                transom_height_in = self._parse_feet_default_inches(transom_height_text)
+                transom_type = _normalize_transom_type(transom_type_text)
+                header_continuous = _parse_boolish(header_continuous_text)
+                jamb_continuous = _parse_boolish(jamb_continuous_text)
 
-            # If face/trim is blank, fall back to a type-appropriate default.
-            is_aluminum = "aluminum" in tab_name.lower()
-            face_assumed = jamb_face_in is None and header_face_in is None
-            if jamb_face_in is None:
-                jamb_face_in = 1.5 if is_aluminum else 2.0
-            if header_face_in is None:
-                header_face_in = 1.5 if is_aluminum else 2.0
+                if (transom_type == "full_width"
+                        and transom_height_in <= 0.0
+                        and re.match(r'^[\d]', str(transom_type_text or "").strip())):
+                    transom_height_in = self._parse_feet_default_inches(transom_type_text)
 
-            trim_in = float(self._parse_hm_inches(trim_text) or 0.0)
-            sill_thickness_in = sill_height_in if sill_height_in > 0.0 else (trim_in if trim_in > 0.0 else float(header_face_in))
+                if transom_type == "none" or transom_height_in <= 0.0:
+                    transom_type = "none"
+                    header_continuous = False
+                    jamb_continuous = False
 
-            opening_spans = []
-            # Default layout: 2nd sidelite on left, main opening center, sidelite on right.
-            if sidelite_left_in > 0:
-                opening_spans.append(("left_sidelite", sidelite_left_in))
-            opening_spans.append(("main", open_width_in))
-            if sidelite_right_in > 0:
-                opening_spans.append(("right_sidelite", sidelite_right_in))
+                if jamb_face_in is None and frame_type_text:
+                    for pattern in (
+                        r"face\s*[:=]?\s*([0-9]+(?:\s+[0-9]+/[0-9]+|/[0-9]+|\.[0-9]+)?)",
+                        r"([0-9]+(?:\s+[0-9]+/[0-9]+|/[0-9]+|\.[0-9]+)?)\s*(?:\"|in|inch|inches)?\s*face",
+                    ):
+                        match = re.search(pattern, frame_type_text, flags=re.IGNORECASE)
+                        if not match:
+                            continue
+                        _parsed = self._parse_hm_inches(match.group(1))
+                        if _parsed is not None:
+                            jamb_face_in = _parsed
+                            header_face_in = _parsed
+                            break
 
-            total_opening_width_in = sum(span[1] for span in opening_spans)
-            outside_width_in = total_opening_width_in + (jamb_face_in * (len(opening_spans) + 1))
-            outside_height_in = open_height_in + (2.0 * header_face_in)
-            elevations.append(
-                {
-                    "opening": opening_text,
-                    "frame_type": frame_type_text,
-                    "open_width_in": open_width_in,
-                    "open_height_in": open_height_in,
+                if open_width_in is None or open_height_in is None:
+                    continue
+
+                is_aluminum = "aluminum" in _cur_tab_name.lower()
+                face_assumed = jamb_face_in is None and header_face_in is None
+                if blind_frame:
+                    jamb_face_in = 1.5 if is_aluminum else 2.0
+                    header_face_in = jamb_face_in
+                    face_assumed = False
+                if jamb_face_in is None:
+                    jamb_face_in = 1.5 if is_aluminum else 2.0
+                if header_face_in is None:
+                    header_face_in = 1.5 if is_aluminum else 2.0
+
+                trim_in = float(self._parse_hm_inches(trim_text) or 0.0)
+                sill_thickness_in = sill_height_in if sill_height_in > 0.0 else (trim_in if trim_in > 0.0 else float(header_face_in))
+
+                opening_spans = []
+                if sidelite_left_in > 0:
+                    opening_spans.append(("left_sidelite", sidelite_left_in))
+                opening_spans.append(("main", open_width_in))
+                if sidelite_right_in > 0:
+                    opening_spans.append(("right_sidelite", sidelite_right_in))
+
+                total_opening_width_in = sum(span[1] for span in opening_spans)
+                outside_width_in = total_opening_width_in + (jamb_face_in * (len(opening_spans) + 1))
+                outside_height_in = open_height_in + (2.0 * header_face_in)
+                elevations.append(
+                    {
+                        "opening": opening_text,
+                        "frame_type": frame_type_text,
+                        "open_width_in": open_width_in,
+                        "open_height_in": open_height_in,
                         "rating": rating_text,
                         "manufacturer": manufacturer_text,
                         "construction": construction_text,
                         "trim": trim_text,
                         "finish": finish_text,
                         "count": count_text,
-                    "jamb_face_in": jamb_face_in,
-                    "header_face_in": header_face_in,
-                    "face_assumed": face_assumed,
-                    "sidelite_right_in": sidelite_right_in,
-                    "sidelite_left_in": sidelite_left_in,
-                    "sidelite_right_height_in": sidelite_right_height_in,
-                    "sidelite_left_height_in": sidelite_left_height_in,
-                    "sill_height_in": sill_height_in,
-                    "sill_thickness_in": sill_thickness_in,
-                    "transom_type": transom_type,
-                    "transom_height_in": transom_height_in,
-                    "header_continuous": header_continuous,
-                    "jamb_continuous": jamb_continuous,
-                    "opening_spans": opening_spans,
-                    "outside_width_in": outside_width_in,
-                    "outside_height_in": outside_height_in,
-                }
-            )
+                        "vendor": vendor_text,
+                        "wall_size": wall_size_text,
+                        "jamb_face_in": jamb_face_in,
+                        "header_face_in": header_face_in,
+                        "face_assumed": face_assumed,
+                        "blind_frame": blind_frame,
+                        "sidelite_right_in": sidelite_right_in,
+                        "sidelite_left_in": sidelite_left_in,
+                        "sidelite_right_height_in": sidelite_right_height_in,
+                        "sidelite_left_height_in": sidelite_left_height_in,
+                        "sill_height_in": sill_height_in,
+                        "sill_thickness_in": sill_thickness_in,
+                        "transom_type": transom_type,
+                        "transom_height_in": transom_height_in,
+                        "header_continuous": header_continuous,
+                        "jamb_continuous": jamb_continuous,
+                        "opening_spans": opening_spans,
+                        "outside_width_in": outside_width_in,
+                        "outside_height_in": outside_height_in,
+                    }
+                )
 
         if not elevations:
             if show_messages:
@@ -25046,7 +25127,9 @@ class MainWindow(QMainWindow):
                     ("FRAME TYPE", title),
                     ("OPENING SIZE", f"{self._format_inches_arch(open_width_in)} x {self._format_inches_arch(open_height_in)}"),
                 ]
-                if data.get("face_assumed"):
+                if data.get("blind_frame"):
+                    info_lines.append(("FACE", "BLIND FRAME"))
+                elif data.get("face_assumed"):
                     is_al = "aluminum" in tab_name.lower()
                     info_lines.append(("FACE", '1-1/2" (assumed)' if is_al else '2" (assumed)'))
                 elif jamb_face_in != header_face_in:
@@ -25064,6 +25147,10 @@ class MainWindow(QMainWindow):
                     info_lines.append(("FINISH", str(data.get("finish"))))
                 if data.get("count"):
                     info_lines.append(("COUNT", str(data.get("count"))))
+                if data.get("vendor"):
+                    info_lines.append(("VENDOR", str(data.get("vendor"))))
+                if data.get("wall_size"):
+                    info_lines.append(("WALL SIZE", str(data.get("wall_size"))))
                 if transom_type != "none":
                     transom_labels = {
                         "door_only": "Door Only",
@@ -25115,6 +25202,9 @@ class MainWindow(QMainWindow):
                 main_has_transom = has_transom and (transom_type in ("full_width", "door_only"))
                 main_open_top_y = transom_bottom_y if main_has_transom else inner_top_y
 
+                _is_blind = bool(data.get("blind_frame"))
+                if _is_blind:
+                    pdf.setDash(6, 3)
                 pdf.setLineWidth(1.6)
                 pdf.line(draw_x, draw_y, draw_x, top_y)
                 pdf.line(right_x, draw_y, right_x, top_y)
@@ -25223,6 +25313,9 @@ class MainWindow(QMainWindow):
                         label_side="right",
                     )
 
+                if _is_blind:
+                    pdf.setDash()
+
                 for gx1, gy1, gx2, gy2 in glass_regions:
                     _draw_glass_hash_marks(gx1, gy1, gx2, gy2)
 
@@ -25311,6 +25404,7 @@ class MainWindow(QMainWindow):
         out_path: Optional[Path] = None,
         prompt_for_path: bool = True,
         show_messages: bool = True,
+        all_source_door_tabs: Optional[list] = None,
     ):
         """Generate scaled door elevations (1/4" = 1'-0") from door tab data."""
         if not HAS_REPORTLAB or canvas is None:
@@ -25432,205 +25526,212 @@ class MainWindow(QMainWindow):
                 return None, None
             return width, height
 
-        door_table = source_door_table
-        door_headers: List[str] = list(source_door_headers or [])
+        # Build list of door tables to process
+        _door_sources = []
+        if all_source_door_tabs:
+            _door_sources = list(all_source_door_tabs)
+        elif source_door_table is not None and source_door_headers:
+            _door_sources = [(source_door_table, list(source_door_headers), source_door_tab_name)]
+        else:
+            if tables_data:
+                for widget, csv_path, headers, _ in tables_data:
+                    stem = csv_path.stem.lower() if hasattr(csv_path, "stem") else ""
+                    table = self._extract_table_widget(widget)
+                    if "door" in stem and "schedule" not in stem and isinstance(table, QTableWidget):
+                        _door_sources.append((table, list(headers), csv_path.stem))
+                        break
 
-        if door_table is None:
-            for widget, csv_path, headers, _ in tables_data:
-                stem = csv_path.stem.lower() if hasattr(csv_path, "stem") else ""
-                table = self._extract_table_widget(widget)
-                if "door" in stem and "schedule" not in stem and isinstance(table, QTableWidget):
-                    door_table = table
-                    door_headers = list(headers)
-                    if not source_door_tab_name:
-                        source_door_tab_name = csv_path.stem
-                    break
-
-        if door_table is None or not door_headers:
+        if not _door_sources:
             QMessageBox.warning(self, "Door Elevations", "Door table was not found.")
             return
 
-        door_offset = 1 if door_table.columnCount() == len(door_headers) + 1 else 0
-        opening_idx = _find_col_idx(door_headers, ["Opening Number", "Opening", "Opening #", "Mark", "Door #"])
-        door_type_idx = _find_col_idx(door_headers, ["Door Type", "Type", "Door"])
-        frame_type_idx = _find_col_idx(door_headers, ["Frame Type", "Frame"])
-        active_width_idx = _find_col_idx(door_headers, ["Active Width", "Active Leaf Width", "Leaf 1 Width", "Primary Leaf Width"])
-        inactive_width_idx = _find_col_idx(door_headers, ["Inactive Width", "Inactive Leaf Width", "Leaf 2 Width", "Secondary Leaf Width"])
-        width_idx = _find_col_idx(door_headers, ["Width", "Door Width", "Nominal Width"])
-        height_idx = _find_col_idx(door_headers, ["Height", "Door Height", "Nominal Height"])
-        size_idx = _find_col_idx(door_headers, ["Size", "Door Size", "Nominal Size"])
-        lite_width_idx = _find_col_idx(door_headers, ["Lite Width", "Vision Lite Width"])
-        lite_height_idx = _find_col_idx(door_headers, ["Lite Height", "Vision Lite Height"])
-        lock_stile_idx = _find_col_idx(door_headers, ["Lock Stile", "Lock Stile Width"])
-        top_rail_idx = _find_col_idx(door_headers, ["Top Rail", "Top Rail Height"])
-        inactive_lite_width_idx = _find_col_idx(door_headers, ["Inactive Lite Width"])
-        inactive_lite_height_idx = _find_col_idx(door_headers, ["Inactive Lite Height"])
-        inactive_lock_stile_idx = _find_col_idx(door_headers, ["Inactive Lock Stile"])
-        inactive_top_rail_idx = _find_col_idx(door_headers, ["Inactive Top Rail"])
-        handing_idx = _find_col_idx(door_headers, ["Handing", "Hand", "Swing"])
-        notes_idx = _find_col_idx(door_headers, ["Description", "Remarks", "Notes"])
-
-        selected_rows = sorted({idx.row() for idx in door_table.selectedIndexes()})
-        row_scope = selected_rows if selected_rows else list(range(door_table.rowCount()))
-
         elevations: List[Dict[str, Any]] = []
-        for row in row_scope:
-            opening_item = door_table.item(row, opening_idx + door_offset) if opening_idx is not None else None
-            door_type_item = door_table.item(row, door_type_idx + door_offset) if door_type_idx is not None else None
-            frame_type_item = door_table.item(row, frame_type_idx + door_offset) if frame_type_idx is not None else None
-            active_width_item = door_table.item(row, active_width_idx + door_offset) if active_width_idx is not None else None
-            inactive_width_item = door_table.item(row, inactive_width_idx + door_offset) if inactive_width_idx is not None else None
-            width_item = door_table.item(row, width_idx + door_offset) if width_idx is not None else None
-            height_item = door_table.item(row, height_idx + door_offset) if height_idx is not None else None
-            size_item = door_table.item(row, size_idx + door_offset) if size_idx is not None else None
-            lite_width_item = door_table.item(row, lite_width_idx + door_offset) if lite_width_idx is not None else None
-            lite_height_item = door_table.item(row, lite_height_idx + door_offset) if lite_height_idx is not None else None
-            lock_stile_item = door_table.item(row, lock_stile_idx + door_offset) if lock_stile_idx is not None else None
-            top_rail_item = door_table.item(row, top_rail_idx + door_offset) if top_rail_idx is not None else None
-            inactive_lite_width_item = door_table.item(row, inactive_lite_width_idx + door_offset) if inactive_lite_width_idx is not None else None
-            inactive_lite_height_item = door_table.item(row, inactive_lite_height_idx + door_offset) if inactive_lite_height_idx is not None else None
-            inactive_lock_stile_item = door_table.item(row, inactive_lock_stile_idx + door_offset) if inactive_lock_stile_idx is not None else None
-            inactive_top_rail_item = door_table.item(row, inactive_top_rail_idx + door_offset) if inactive_top_rail_idx is not None else None
-            handing_item = door_table.item(row, handing_idx + door_offset) if handing_idx is not None else None
-            notes_item = door_table.item(row, notes_idx + door_offset) if notes_idx is not None else None
+        for door_table, door_headers, _cur_tab_name in _door_sources:
+            _cur_tab_name = _cur_tab_name or source_door_tab_name
 
-            opening_num = opening_item.text().strip() if opening_item else ""
-            door_type = door_type_item.text().strip() if door_type_item else ""
-            frame_type = frame_type_item.text().strip() if frame_type_item else ""
-            active_width_text = active_width_item.text().strip() if active_width_item else ""
-            inactive_width_text = inactive_width_item.text().strip() if inactive_width_item else ""
-            width_text = width_item.text().strip() if width_item else ""
-            height_text = height_item.text().strip() if height_item else ""
-            size_text = size_item.text().strip() if size_item else ""
-            lite_width_text = lite_width_item.text().strip() if lite_width_item else ""
-            lite_height_text = lite_height_item.text().strip() if lite_height_item else ""
-            lock_stile_text = lock_stile_item.text().strip() if lock_stile_item else ""
-            top_rail_text = top_rail_item.text().strip() if top_rail_item else ""
-            inactive_lite_width_text = inactive_lite_width_item.text().strip() if inactive_lite_width_item else ""
-            inactive_lite_height_text = inactive_lite_height_item.text().strip() if inactive_lite_height_item else ""
-            inactive_lock_stile_text = inactive_lock_stile_item.text().strip() if inactive_lock_stile_item else ""
-            inactive_top_rail_text = inactive_top_rail_item.text().strip() if inactive_top_rail_item else ""
-            handing = handing_item.text().strip() if handing_item else ""
-            notes = notes_item.text().strip() if notes_item else ""
+            door_offset = 1 if door_table.columnCount() == len(door_headers) + 1 else 0
+            opening_idx = _find_col_idx(door_headers, ["Opening Number", "Opening", "Opening #", "Mark", "Door #"])
+            door_type_idx = _find_col_idx(door_headers, ["Door Type", "Type", "Door"])
+            frame_type_idx = _find_col_idx(door_headers, ["Frame Type", "Frame"])
+            active_width_idx = _find_col_idx(door_headers, ["Active Width", "Active Leaf Width", "Leaf 1 Width", "Primary Leaf Width"])
+            inactive_width_idx = _find_col_idx(door_headers, ["Inactive Width", "Inactive Leaf Width", "Leaf 2 Width", "Secondary Leaf Width"])
+            width_idx = _find_col_idx(door_headers, ["Width", "Door Width", "Nominal Width"])
+            height_idx = _find_col_idx(door_headers, ["Height", "Door Height", "Nominal Height"])
+            size_idx = _find_col_idx(door_headers, ["Size", "Door Size", "Nominal Size"])
+            lite_width_idx = _find_col_idx(door_headers, ["Lite Width", "Vision Lite Width"])
+            lite_height_idx = _find_col_idx(door_headers, ["Lite Height", "Vision Lite Height"])
+            lock_stile_idx = _find_col_idx(door_headers, ["Lock Stile", "Lock Stile Width"])
+            top_rail_idx = _find_col_idx(door_headers, ["Top Rail", "Top Rail Height"])
+            inactive_lite_width_idx = _find_col_idx(door_headers, ["Inactive Lite Width"])
+            inactive_lite_height_idx = _find_col_idx(door_headers, ["Inactive Lite Height"])
+            inactive_lock_stile_idx = _find_col_idx(door_headers, ["Inactive Lock Stile"])
+            inactive_top_rail_idx = _find_col_idx(door_headers, ["Inactive Top Rail"])
+            handing_idx = _find_col_idx(door_headers, ["Handing", "Hand", "Swing"])
+            notes_idx = _find_col_idx(door_headers, ["Description", "Remarks", "Notes"])
 
-            if not opening_num and not door_type:
-                continue
+            # Only use selected rows when processing a single tab
+            if len(_door_sources) == 1:
+                selected_rows = sorted({idx.row() for idx in door_table.selectedIndexes()})
+                row_scope = selected_rows if selected_rows else list(range(door_table.rowCount()))
+            else:
+                row_scope = list(range(door_table.rowCount()))
 
-            if (not width_text or not height_text) and size_text:
-                parsed_w, parsed_h = _parse_size_pair(size_text)
-                if not width_text and parsed_w:
-                    width_text = parsed_w
-                if not height_text and parsed_h:
-                    height_text = parsed_h
+            for row in row_scope:
+                opening_item = door_table.item(row, opening_idx + door_offset) if opening_idx is not None else None
+                door_type_item = door_table.item(row, door_type_idx + door_offset) if door_type_idx is not None else None
+                frame_type_item = door_table.item(row, frame_type_idx + door_offset) if frame_type_idx is not None else None
+                active_width_item = door_table.item(row, active_width_idx + door_offset) if active_width_idx is not None else None
+                inactive_width_item = door_table.item(row, inactive_width_idx + door_offset) if inactive_width_idx is not None else None
+                width_item = door_table.item(row, width_idx + door_offset) if width_idx is not None else None
+                height_item = door_table.item(row, height_idx + door_offset) if height_idx is not None else None
+                size_item = door_table.item(row, size_idx + door_offset) if size_idx is not None else None
+                lite_width_item = door_table.item(row, lite_width_idx + door_offset) if lite_width_idx is not None else None
+                lite_height_item = door_table.item(row, lite_height_idx + door_offset) if lite_height_idx is not None else None
+                lock_stile_item = door_table.item(row, lock_stile_idx + door_offset) if lock_stile_idx is not None else None
+                top_rail_item = door_table.item(row, top_rail_idx + door_offset) if top_rail_idx is not None else None
+                inactive_lite_width_item = door_table.item(row, inactive_lite_width_idx + door_offset) if inactive_lite_width_idx is not None else None
+                inactive_lite_height_item = door_table.item(row, inactive_lite_height_idx + door_offset) if inactive_lite_height_idx is not None else None
+                inactive_lock_stile_item = door_table.item(row, inactive_lock_stile_idx + door_offset) if inactive_lock_stile_idx is not None else None
+                inactive_top_rail_item = door_table.item(row, inactive_top_rail_idx + door_offset) if inactive_top_rail_idx is not None else None
+                handing_item = door_table.item(row, handing_idx + door_offset) if handing_idx is not None else None
+                notes_item = door_table.item(row, notes_idx + door_offset) if notes_idx is not None else None
 
-            if not active_width_text:
-                active_width_text = width_text
+                opening_num = opening_item.text().strip() if opening_item else ""
+                door_type = door_type_item.text().strip() if door_type_item else ""
+                frame_type = frame_type_item.text().strip() if frame_type_item else ""
+                active_width_text = active_width_item.text().strip() if active_width_item else ""
+                inactive_width_text = inactive_width_item.text().strip() if inactive_width_item else ""
+                width_text = width_item.text().strip() if width_item else ""
+                height_text = height_item.text().strip() if height_item else ""
+                size_text = size_item.text().strip() if size_item else ""
+                lite_width_text = lite_width_item.text().strip() if lite_width_item else ""
+                lite_height_text = lite_height_item.text().strip() if lite_height_item else ""
+                lock_stile_text = lock_stile_item.text().strip() if lock_stile_item else ""
+                top_rail_text = top_rail_item.text().strip() if top_rail_item else ""
+                inactive_lite_width_text = inactive_lite_width_item.text().strip() if inactive_lite_width_item else ""
+                inactive_lite_height_text = inactive_lite_height_item.text().strip() if inactive_lite_height_item else ""
+                inactive_lock_stile_text = inactive_lock_stile_item.text().strip() if inactive_lock_stile_item else ""
+                inactive_top_rail_text = inactive_top_rail_item.text().strip() if inactive_top_rail_item else ""
+                handing = handing_item.text().strip() if handing_item else ""
+                notes = notes_item.text().strip() if notes_item else ""
 
-            active_width_inches = _parse_inches(active_width_text, 0.0)
-            inactive_width_inches = _parse_inches(inactive_width_text, 0.0)
-            width_inches = _parse_inches(width_text, 0.0)
-            height_inches = _parse_inches(height_text, 84.0)
-
-            code_w, code_h = _parse_type_size_from_code(door_type)
-            if active_width_inches <= 0 and width_inches > 0:
-                active_width_inches = width_inches
-            if active_width_inches <= 0 and code_w is not None:
-                active_width_inches = code_w
-            if height_inches <= 0 and code_h is not None:
-                height_inches = code_h
-
-            total_width_inches = active_width_inches + inactive_width_inches if inactive_width_inches > 0 else active_width_inches
-            if total_width_inches <= 0:
-                total_width_inches = 36.0
-                active_width_inches = 36.0
-
-            lite_width_inches = _parse_inches_direct(lite_width_text, 0.0)
-            lite_height_inches = _parse_inches_direct(lite_height_text, 0.0)
-            lock_stile_inches = _parse_inches_direct(lock_stile_text, 0.0)
-            top_rail_inches = _parse_inches_direct(top_rail_text, 0.0)
-
-            inactive_lite_width_inches = _parse_inches_direct(inactive_lite_width_text, 0.0)
-            inactive_lite_height_inches = _parse_inches_direct(inactive_lite_height_text, 0.0)
-            inactive_lock_stile_inches = _parse_inches_direct(inactive_lock_stile_text, 0.0)
-            inactive_top_rail_inches = _parse_inches_direct(inactive_top_rail_text, 0.0)
-
-            # Only copy active lite values to the inactive leaf when it is a
-            # true equal pair (same leaf widths). For unequal pairs each leaf
-            # has its own distinct geometry, so leave inactive fields at 0
-            # (no lite drawn) when the inactive-specific columns are empty.
-            is_equal_pair = (
-                inactive_width_inches > 0
-                and abs(active_width_inches - inactive_width_inches) < 0.25
-            )
-            if is_equal_pair:
-                if inactive_lite_width_inches <= 0:
-                    inactive_lite_width_inches = lite_width_inches
-                if inactive_lite_height_inches <= 0:
-                    inactive_lite_height_inches = lite_height_inches
-                if inactive_lock_stile_inches <= 0:
-                    inactive_lock_stile_inches = lock_stile_inches
-                if inactive_top_rail_inches <= 0:
-                    inactive_top_rail_inches = top_rail_inches
-
-            width_label = _format_inches_arch(total_width_inches)
-            height_label = _format_inches_arch(height_inches)
-
-            if not opening_num:
-                base = source_door_tab_name.strip() if source_door_tab_name else "Door"
-                opening_num = f"{base} Row {row + 1}"
-
-            info_items = []
-            skip_info_indices = {idx for idx in [opening_idx, door_type_idx] if idx is not None}
-            excluded_info_keywords = [
-                "cost",
-                "labor",
-                "hours",
-                "freight",
-                "quoted",
-                "vendor",
-                "load & dist",
-                "load&dist",
-            ]
-            for header_idx, header_text in enumerate(door_headers):
-                if header_idx in skip_info_indices:
+                if not opening_num and not door_type:
                     continue
-                header_label = str(header_text).strip()
-                header_compact = header_label.lower()
-                if any(keyword in header_compact for keyword in excluded_info_keywords):
-                    continue
-                cell_item = door_table.item(row, header_idx + door_offset)
-                cell_text = cell_item.text().strip() if cell_item else ""
-                compact = cell_text.lower().replace(" ", "")
-                if not cell_text or compact in {"-", "0", "0.0", "0.00", "n/a", "na"}:
-                    continue
-                info_items.append((header_label, cell_text))
 
-            elevations.append(
-                {
-                    "opening": opening_num,
-                    "door_type": door_type,
-                    "frame_type": frame_type,
-                    "width": width_label,
-                    "height": height_label,
-                    "width_inches": f"{total_width_inches:.3f}",
-                    "active_width": _format_inches_arch(active_width_inches),
-                    "inactive_width": _format_inches_arch(inactive_width_inches) if inactive_width_inches > 0 else "",
-                    "active_width_inches": f"{active_width_inches:.3f}",
-                    "inactive_width_inches": f"{inactive_width_inches:.3f}",
-                    "height_inches": f"{height_inches:.3f}",
-                    "lite_width_inches": f"{lite_width_inches:.3f}",
-                    "lite_height_inches": f"{lite_height_inches:.3f}",
-                    "lock_stile_inches": f"{lock_stile_inches:.3f}",
-                    "top_rail_inches": f"{top_rail_inches:.3f}",
-                    "inactive_lite_width_inches": f"{inactive_lite_width_inches:.3f}",
-                    "inactive_lite_height_inches": f"{inactive_lite_height_inches:.3f}",
-                    "inactive_lock_stile_inches": f"{inactive_lock_stile_inches:.3f}",
-                    "inactive_top_rail_inches": f"{inactive_top_rail_inches:.3f}",
-                    "handing": handing,
-                    "notes": notes,
-                    "info_items": info_items,
-                }
-            )
+                if (not width_text or not height_text) and size_text:
+                    parsed_w, parsed_h = _parse_size_pair(size_text)
+                    if not width_text and parsed_w:
+                        width_text = parsed_w
+                    if not height_text and parsed_h:
+                        height_text = parsed_h
+
+                if not active_width_text:
+                    active_width_text = width_text
+
+                active_width_inches = _parse_inches(active_width_text, 0.0)
+                inactive_width_inches = _parse_inches(inactive_width_text, 0.0)
+                width_inches = _parse_inches(width_text, 0.0)
+                height_inches = _parse_inches(height_text, 84.0)
+
+                code_w, code_h = _parse_type_size_from_code(door_type)
+                if active_width_inches <= 0 and width_inches > 0:
+                    active_width_inches = width_inches
+                if active_width_inches <= 0 and code_w is not None:
+                    active_width_inches = code_w
+                if height_inches <= 0 and code_h is not None:
+                    height_inches = code_h
+
+                total_width_inches = active_width_inches + inactive_width_inches if inactive_width_inches > 0 else active_width_inches
+                if total_width_inches <= 0:
+                    total_width_inches = 36.0
+                    active_width_inches = 36.0
+
+                lite_width_inches = _parse_inches_direct(lite_width_text, 0.0)
+                lite_height_inches = _parse_inches_direct(lite_height_text, 0.0)
+                lock_stile_inches = _parse_inches_direct(lock_stile_text, 0.0)
+                top_rail_inches = _parse_inches_direct(top_rail_text, 0.0)
+
+                inactive_lite_width_inches = _parse_inches_direct(inactive_lite_width_text, 0.0)
+                inactive_lite_height_inches = _parse_inches_direct(inactive_lite_height_text, 0.0)
+                inactive_lock_stile_inches = _parse_inches_direct(inactive_lock_stile_text, 0.0)
+                inactive_top_rail_inches = _parse_inches_direct(inactive_top_rail_text, 0.0)
+
+                # Only copy active lite values to the inactive leaf when it is a
+                # true equal pair (same leaf widths). For unequal pairs each leaf
+                # has its own distinct geometry, so leave inactive fields at 0
+                # (no lite drawn) when the inactive-specific columns are empty.
+                is_equal_pair = (
+                    inactive_width_inches > 0
+                    and abs(active_width_inches - inactive_width_inches) < 0.25
+                )
+                if is_equal_pair:
+                    if inactive_lite_width_inches <= 0:
+                        inactive_lite_width_inches = lite_width_inches
+                    if inactive_lite_height_inches <= 0:
+                        inactive_lite_height_inches = lite_height_inches
+                    if inactive_lock_stile_inches <= 0:
+                        inactive_lock_stile_inches = lock_stile_inches
+                    if inactive_top_rail_inches <= 0:
+                        inactive_top_rail_inches = top_rail_inches
+
+                width_label = _format_inches_arch(total_width_inches)
+                height_label = _format_inches_arch(height_inches)
+
+                if not opening_num:
+                    base = _cur_tab_name.strip() if _cur_tab_name else "Door"
+                    opening_num = f"{base} Row {row + 1}"
+
+                info_items = []
+                skip_info_indices = {idx for idx in [opening_idx, door_type_idx] if idx is not None}
+                excluded_info_keywords = [
+                    "cost",
+                    "labor",
+                    "hours",
+                    "freight",
+                    "quoted",
+                    "load & dist",
+                    "load&dist",
+                ]
+                for header_idx, header_text in enumerate(door_headers):
+                    if header_idx in skip_info_indices:
+                        continue
+                    header_label = str(header_text).strip()
+                    header_compact = header_label.lower()
+                    if any(keyword in header_compact for keyword in excluded_info_keywords):
+                        continue
+                    cell_item = door_table.item(row, header_idx + door_offset)
+                    cell_text = cell_item.text().strip() if cell_item else ""
+                    compact = cell_text.lower().replace(" ", "")
+                    if not cell_text or compact in {"-", "0", "0.0", "0.00", "n/a", "na"}:
+                        continue
+                    info_items.append((header_label, cell_text))
+
+                elevations.append(
+                    {
+                        "opening": opening_num,
+                        "door_type": door_type,
+                        "frame_type": frame_type,
+                        "width": width_label,
+                        "height": height_label,
+                        "width_inches": f"{total_width_inches:.3f}",
+                        "active_width": _format_inches_arch(active_width_inches),
+                        "inactive_width": _format_inches_arch(inactive_width_inches) if inactive_width_inches > 0 else "",
+                        "active_width_inches": f"{active_width_inches:.3f}",
+                        "inactive_width_inches": f"{inactive_width_inches:.3f}",
+                        "height_inches": f"{height_inches:.3f}",
+                        "lite_width_inches": f"{lite_width_inches:.3f}",
+                        "lite_height_inches": f"{lite_height_inches:.3f}",
+                        "lock_stile_inches": f"{lock_stile_inches:.3f}",
+                        "top_rail_inches": f"{top_rail_inches:.3f}",
+                        "inactive_lite_width_inches": f"{inactive_lite_width_inches:.3f}",
+                        "inactive_lite_height_inches": f"{inactive_lite_height_inches:.3f}",
+                        "inactive_lock_stile_inches": f"{inactive_lock_stile_inches:.3f}",
+                        "inactive_top_rail_inches": f"{inactive_top_rail_inches:.3f}",
+                        "handing": handing,
+                        "notes": notes,
+                        "info_items": info_items,
+                    }
+                )
 
         if not elevations:
             if show_messages:
@@ -27172,6 +27273,210 @@ class MainWindow(QMainWindow):
             
             wood_doors_table.blockSignals(False)
         except Exception as e:
+            pass
+
+    def _apply_frame_formulas(self, frame_table, headers, workbook_path, tables_data=None):
+        """Apply formula columns for all rows of a frame table on initial load."""
+        frame_type_col = None
+        for idx, h in enumerate(headers):
+            if h.strip().lower() == "frame type":
+                frame_type_col = idx
+                break
+        if frame_type_col is None:
+            return
+        for row_idx in range(frame_table.rowCount()):
+            ft_item = frame_table.item(row_idx, frame_type_col)
+            if ft_item and ft_item.text().strip():
+                self._recalculate_frame_formulas_for_row(frame_table, row_idx, headers, workbook_path, tables_data)
+        self._recalculate_frame_unit_costs_for_table(frame_table, headers)
+
+    def _recalculate_frame_formulas_for_row(self, frame_table, row_idx, headers, workbook_path, tables_data=None):
+        """Recalculate all formula columns for a single frame row when Frame Type changes.
+
+        Pulls data from the Schedule (in-memory or CSV) and populates the
+        corresponding frame-table columns, mirroring the behaviour of
+        ``_recalculate_wood_door_formulas_for_row`` for door tabs.
+        """
+        try:
+            # Build a header lookup for the frame table
+            frame_header_map = {}
+            for idx, h in enumerate(headers):
+                h_lower = h.strip().lower()
+                if h_lower:
+                    frame_header_map[h_lower] = idx
+
+            frame_type_col = frame_header_map.get("frame type")
+            if frame_type_col is None:
+                return
+
+            # Get frame type value
+            frame_type_item = frame_table.item(row_idx, frame_type_col)
+            frame_type = frame_type_item.text().strip() if frame_type_item else ""
+
+            # Columns we might populate from the schedule
+            pull_targets = {
+                "open width":          {"editable": False},
+                "open height":         {"editable": False},
+                "height":              {"editable": False},
+                "elevation":           {"editable": True},
+                "fire rating":         {"editable": False},
+                "stc":                 {"editable": False},
+                "finish":              {"editable": True},
+                "mat'l":               {"editable": False},
+                "metal style":         {"editable": False},
+                "material":            {"editable": False},
+                "construction":        {"editable": False},
+                "profile":             {"editable": False},
+                "jamb profile":        {"editable": False},
+                "sidelite width":      {"editable": False},
+                "2nd sidelite width":  {"editable": False},
+            }
+
+            # If frame type is empty, clear pulled fields and make them editable
+            if not frame_type:
+                frame_table.blockSignals(True)
+                for target_name, _opts in pull_targets.items():
+                    col = frame_header_map.get(target_name)
+                    if col is None:
+                        continue
+                    item = frame_table.item(row_idx, col)
+                    if item is None:
+                        item = QTableWidgetItem("")
+                        frame_table.setItem(row_idx, col, item)
+                    else:
+                        item.setText("")
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                    item.setBackground(QColor(30, 30, 30))
+                    item.setForeground(QColor(255, 255, 255))
+                frame_table.blockSignals(False)
+                return
+
+            # ---- Obtain schedule data ----
+            sch_headers = None
+            sch_rows = None
+
+            if tables_data:
+                schedule_data = self._get_schedule_data_from_tables(tables_data)
+                if schedule_data:
+                    sch_headers, sch_rows = schedule_data
+
+            if not sch_headers:
+                schedule_path = workbook_path / "Schedule.csv"
+                if not schedule_path.exists():
+                    return
+                try:
+                    with open(schedule_path, "r", newline="", encoding="utf-8-sig") as f:
+                        reader = csv.reader(f)
+                        rows = list(reader)
+                    if not rows:
+                        return
+                    sch_headers = rows[0]
+                    sch_rows = rows[1:]
+                except Exception:
+                    return
+
+            if not sch_headers or not sch_rows:
+                return
+
+            # Build schedule header map
+            sch_map = {}
+            for idx, h in enumerate(sch_headers):
+                h_lower = h.strip().lower()
+                if h_lower:
+                    sch_map[h_lower] = idx
+
+            # Identify the frame-type key column(s) in the schedule
+            sch_frame_type_col = sch_map.get("frame type")
+            sch_frame_plan_type_col = sch_map.get("frame plan type")
+            if sch_frame_type_col is None and sch_frame_plan_type_col is None:
+                return
+
+            # Mapping: schedule column name -> list of frame header targets
+            sch_to_frame = {
+                "width":          ["open width", "width"],
+                "height":         ["open height", "height"],
+                "description":    ["elevation"],
+                "rating_fire":    ["fire rating"],
+                "stc":            ["stc"],
+                "frame material": ["mat'l", "metal style", "material"],
+                "frame finish":   ["finish"],
+                "profile":        ["jamb profile", "profile"],
+                "sidelite":       ["sidelite width"],
+                "sidelite 2":     ["2nd sidelite width"],
+            }
+
+            # Build first-occurrence lookup keyed by frame type (lowercase)
+            source_lookup = {}
+            for row in sch_rows:
+                # Try "Frame type" first, then "Frame Plan type"
+                ft_val = ""
+                if sch_frame_type_col is not None and sch_frame_type_col < len(row):
+                    ft_val = row[sch_frame_type_col].strip()
+                if not ft_val and sch_frame_plan_type_col is not None and sch_frame_plan_type_col < len(row):
+                    ft_val = row[sch_frame_plan_type_col].strip()
+                if not ft_val:
+                    continue
+                key = ft_val.lower()
+                if key in source_lookup:
+                    continue
+                entry = {}
+                for sch_col_name, frame_targets in sch_to_frame.items():
+                    sch_col = sch_map.get(sch_col_name)
+                    if sch_col is not None and sch_col < len(row):
+                        entry[sch_col_name] = row[sch_col].strip()
+                source_lookup[key] = entry
+
+            frame_in_schedule = frame_type.lower() in source_lookup
+            sched_entry = source_lookup.get(frame_type.lower(), {})
+
+            # ---- Push values into frame row ----
+            frame_table.blockSignals(True)
+
+            for sch_col_name, frame_targets in sch_to_frame.items():
+                value = sched_entry.get(sch_col_name, "")
+                # Find first matching target column in this frame table
+                target_col = None
+                target_name = None
+                for t in frame_targets:
+                    if t in frame_header_map:
+                        target_col = frame_header_map[t]
+                        target_name = t
+                        break
+                if target_col is None:
+                    continue
+
+                is_editable = pull_targets.get(target_name, {}).get("editable", False)
+
+                item = frame_table.item(row_idx, target_col)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    frame_table.setItem(row_idx, target_col, item)
+
+                if frame_in_schedule and value:
+                    item.setText(value)
+                    if is_editable:
+                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                        item.setBackground(QColor(30, 30, 30))
+                        item.setForeground(QColor(255, 255, 255))
+                    else:
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                        item.setBackground(QColor(60, 60, 60))
+                        item.setForeground(QColor(200, 200, 200))
+                elif frame_in_schedule:
+                    # Schedule has this frame type but no value for this field
+                    if not item.text().strip():
+                        item.setText("")
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                    item.setBackground(QColor(30, 30, 30))
+                    item.setForeground(QColor(255, 255, 255))
+                else:
+                    # Frame type not in schedule — leave editable
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                    item.setBackground(QColor(30, 30, 30))
+                    item.setForeground(QColor(255, 255, 255))
+
+            frame_table.blockSignals(False)
+        except Exception:
             pass
 
     def _recalculate_inactive_width_for_row(self, wood_doors_table, row_idx, headers, workbook_path, tables_data=None):
