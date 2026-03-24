@@ -13432,6 +13432,11 @@ class MainWindow(QMainWindow):
             _, default_rows = _default_financials_table()
             default_descs = {r[0].strip().lower(): r[0] for r in default_rows}
 
+            # Legacy row-name aliases (old name -> current template name)
+            legacy_aliases = {
+                "deliveries:": "delivery/stocking/clean up:",
+            }
+
             # Cells that should always remain formula-driven in Financials.
             # Legacy workbooks may contain hardcoded numbers in these locations.
             formula_repair_cells = set()
@@ -13446,6 +13451,8 @@ class MainWindow(QMainWindow):
             for row in rows:
                 desc = row[0].strip() if row else ""
                 desc_key = desc.lower()
+                # Map legacy row names to current template names
+                desc_key = legacy_aliases.get(desc_key, desc_key)
                 if desc_key in default_descs and desc_key not in existing_by_desc:
                     existing_by_desc[desc_key] = row
                 else:
@@ -16544,10 +16551,29 @@ class MainWindow(QMainWindow):
                     color: {c['selection_text']};
                 }}
                 QLineEdit {{
+                    background-color: {c['input_bg']} !important;
+                    color: {c['text_primary']} !important;
+                    border: 1px solid {c['splitter_hover']};
+                    padding: 2px !important;
+                    font-size: 13px;
+                }}
+                QComboBox {{
+                    background-color: {c['input_bg']} !important;
+                    color: {c['text_primary']} !important;
+                    border: 1px solid {c['splitter_hover']};
+                    padding: 2px !important;
+                    font-size: 13px;
+                }}
+                QComboBox QLineEdit {{
+                    background-color: {c['input_bg']} !important;
+                    color: {c['text_primary']} !important;
+                    padding: 2px !important;
+                }}
+                QComboBox QAbstractItemView {{
                     background-color: {c['input_bg']};
                     color: {c['text_primary']};
-                    border: 1px solid {c['splitter_hover']};
-                    padding: 2px;
+                    selection-background-color: {c['selection_bg']};
+                    selection-color: {c['selection_text']};
                 }}
             """)
             
@@ -17863,12 +17889,18 @@ class MainWindow(QMainWindow):
                 def apply_filters():
                     for r in range(table.rowCount()):
                         hide = False
-                        for col_idx, text in filters.items():
+                        for col_idx, allowed in filters.items():
                             item = table.item(r, col_idx)
-                            cell_text = item.text().lower() if item else ""
-                            if text not in cell_text:
-                                hide = True
-                                break
+                            cell_text = item.text().strip() if item else ""
+                            if isinstance(allowed, set):
+                                if cell_text.lower() not in allowed:
+                                    hide = True
+                                    break
+                            else:
+                                # Legacy: single text substring match
+                                if allowed not in cell_text.lower():
+                                    hide = True
+                                    break
                         table.setRowHidden(r, hide)
                     
                     # Update header styling to show filtered columns
@@ -18004,39 +18036,106 @@ class MainWindow(QMainWindow):
                                 val = item.text().strip()
                                 if val:
                                     unique_values.add(val)
-                        
-                        # Create filter dialog with editable combo box
+
+                        # Also include blank as a selectable option
+                        has_blanks = False
+                        for r in range(table.rowCount()):
+                            item = table.item(r, col)
+                            if not item or not item.text().strip():
+                                has_blanks = True
+                                break
+
+                        # Build the Excel-style multi-select filter dialog
                         filter_dlg = QDialog(dlg)
                         filter_dlg.setWindowTitle("Filter Column")
-                        filter_layout = QVBoxLayout(filter_dlg)
-                        
-                        col_name = hdrs[header_idx] if 0 <= header_idx < len(hdrs) else "Column"
-                        filter_layout.addWidget(QLabel(f"Filter '{col_name}':"))
-                        
-                        filter_combo = QComboBox()
-                        filter_combo.setEditable(True)
-                        filter_combo.addItem("")  # Empty option to clear filter
-                        for val in sorted(unique_values):
-                            filter_combo.addItem(val)
-                        
-                        # Set current filter value if exists
-                        current = filters.get(col, "")
-                        if current:
-                            filter_combo.setCurrentText(current)
-                        
-                        filter_layout.addWidget(filter_combo)
-                        
+                        filter_dlg.setMinimumWidth(280)
+                        filter_dlg.setMinimumHeight(370)
+                        fl = QVBoxLayout(filter_dlg)
+
+                        col_label = hdrs[header_idx] if 0 <= header_idx < len(hdrs) else "Column"
+                        fl.addWidget(QLabel(f"Filter '{col_label}':"))
+
+                        # Search box to narrow the list
+                        search_box = QLineEdit()
+                        search_box.setPlaceholderText("Search...")
+                        fl.addWidget(search_box)
+
+                        # Select All / Deselect All buttons
+                        sel_row = QHBoxLayout()
+                        btn_sel_all = QPushButton("Select All")
+                        btn_desel_all = QPushButton("Deselect All")
+                        sel_row.addWidget(btn_sel_all)
+                        sel_row.addWidget(btn_desel_all)
+                        fl.addLayout(sel_row)
+
+                        # Checkbox list
+                        list_widget = QListWidget()
+                        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+
+                        sorted_vals = sorted(unique_values, key=str.lower)
+                        if has_blanks:
+                            sorted_vals.insert(0, "")
+
+                        # Determine which values are currently selected
+                        current_filter = filters.get(col)
+                        for val in sorted_vals:
+                            item = QListWidgetItem(val if val else "(Blanks)")
+                            item.setData(Qt.ItemDataRole.UserRole, val)  # store real value
+                            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                            if isinstance(current_filter, set):
+                                item.setCheckState(
+                                    Qt.CheckState.Checked if val.lower() in current_filter else Qt.CheckState.Unchecked
+                                )
+                            else:
+                                # No active filter = everything checked
+                                item.setCheckState(Qt.CheckState.Checked)
+                            list_widget.addItem(item)
+                        fl.addWidget(list_widget)
+
+                        def _filter_list(text):
+                            text_lower = text.lower()
+                            for i in range(list_widget.count()):
+                                lw_item = list_widget.item(i)
+                                display = lw_item.text().lower()
+                                lw_item.setHidden(text_lower not in display)
+
+                        def _select_all_visible():
+                            for i in range(list_widget.count()):
+                                lw_item = list_widget.item(i)
+                                if not lw_item.isHidden():
+                                    lw_item.setCheckState(Qt.CheckState.Checked)
+
+                        def _deselect_all_visible():
+                            for i in range(list_widget.count()):
+                                lw_item = list_widget.item(i)
+                                if not lw_item.isHidden():
+                                    lw_item.setCheckState(Qt.CheckState.Unchecked)
+
+                        search_box.textChanged.connect(_filter_list)
+                        btn_sel_all.clicked.connect(_select_all_visible)
+                        btn_desel_all.clicked.connect(_deselect_all_visible)
+
                         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
                         btn_box.accepted.connect(filter_dlg.accept)
                         btn_box.rejected.connect(filter_dlg.reject)
-                        filter_layout.addWidget(btn_box)
-                        
+                        fl.addWidget(btn_box)
+
                         if filter_dlg.exec() == QDialog.DialogCode.Accepted:
-                            text = filter_combo.currentText().strip().lower()
-                            if text:
-                                filters[col] = text
-                            elif col in filters:
-                                del filters[col]
+                            checked = set()
+                            all_checked = True
+                            for i in range(list_widget.count()):
+                                lw_item = list_widget.item(i)
+                                val = lw_item.data(Qt.ItemDataRole.UserRole)
+                                if lw_item.checkState() == Qt.CheckState.Checked:
+                                    checked.add(val.lower())
+                                else:
+                                    all_checked = False
+                            if all_checked:
+                                # Everything selected = no filter
+                                if col in filters:
+                                    del filters[col]
+                            else:
+                                filters[col] = checked
                             apply_filters()
                     elif act_replace and chosen is act_replace:
                         col_label = hdrs[header_idx] if 0 <= header_idx < len(hdrs) else "Column"
@@ -19962,6 +20061,7 @@ class MainWindow(QMainWindow):
         schedule_kpi_ohp_pct_label = None
         schedule_kpi_admin_misc_label = None
         schedule_kpi_allowances_label = None
+        schedule_kpi_avg_sell_label = None
 
         def _apply_table_viewport_blend_style(table_widget: QTableWidget) -> None:
             """Use panel color for unused viewport area while keeping cells readable."""
@@ -19993,10 +20093,29 @@ class MainWindow(QMainWindow):
                     color: {tc['selection_text']};
                 }}
                 QLineEdit {{
+                    background-color: {tc['input_bg']} !important;
+                    color: {tc['text_primary']} !important;
+                    border: 1px solid {tc['splitter_hover']};
+                    padding: 2px !important;
+                    font-size: 13px;
+                }}
+                QComboBox {{
+                    background-color: {tc['input_bg']} !important;
+                    color: {tc['text_primary']} !important;
+                    border: 1px solid {tc['splitter_hover']};
+                    padding: 2px !important;
+                    font-size: 13px;
+                }}
+                QComboBox QLineEdit {{
+                    background-color: {tc['input_bg']} !important;
+                    color: {tc['text_primary']} !important;
+                    padding: 2px !important;
+                }}
+                QComboBox QAbstractItemView {{
                     background-color: {tc['input_bg']};
                     color: {tc['text_primary']};
-                    border: 1px solid {tc['splitter_hover']};
-                    padding: 2px;
+                    selection-background-color: {tc['selection_bg']};
+                    selection-color: {tc['selection_text']};
                 }}
                 """
             )
@@ -20350,9 +20469,13 @@ class MainWindow(QMainWindow):
             ohp_pct_card, schedule_kpi_ohp_pct_label = _make_schedule_kpi_card("OH & P %", "#D59BFF")
             admin_misc_card, schedule_kpi_admin_misc_label = _make_schedule_kpi_card("Total Admin/Misc Cost", "#F4978E")
             allowances_card, schedule_kpi_allowances_label = _make_schedule_kpi_card("Total Allowances", "#F7E27A")
+            avg_sell_card, schedule_kpi_avg_sell_label = _make_schedule_kpi_card("Avg Sell / Opening", "#7AE8CF")
+            avg_sell_tooltip = "Average sell per opening = Working Sell ÷ Total Openings."
+            avg_sell_card.setToolTip(avg_sell_tooltip)
+            schedule_kpi_avg_sell_label.setToolTip(avg_sell_tooltip)
             working_sell_tooltip = (
                 "Working Sell = Schedule Sell (checked rows, or visible rows when none are checked) "
-                "+ Admin/Misc Sell remainder from Bid Total."
+                "+ Admin/Misc Sell \u2212 Allowances (shown separately)."
             )
             working_sell_card.setToolTip(working_sell_tooltip)
             schedule_kpi_sell_label.setToolTip(working_sell_tooltip)
@@ -20376,6 +20499,7 @@ class MainWindow(QMainWindow):
             kpi_row.addWidget(ohp_pct_card)
             kpi_row.addWidget(admin_misc_card)
             kpi_row.addWidget(allowances_card)
+            kpi_row.addWidget(avg_sell_card)
             schedule_layout.addLayout(kpi_row)
 
             table_card = QWidget()
@@ -22332,6 +22456,8 @@ class MainWindow(QMainWindow):
                     schedule_kpi_admin_misc_label.setText("-")
                 if schedule_kpi_allowances_label is not None:
                     schedule_kpi_allowances_label.setText("-")
+                if schedule_kpi_avg_sell_label is not None:
+                    schedule_kpi_avg_sell_label.setText("-")
                 return
 
             # Keep status text in the bottom bar only while Schedule is active.
@@ -22499,12 +22625,11 @@ class MainWindow(QMainWindow):
                         value_item = admin_tbl.item(r, value_idx + col_offset)
                         admin_misc_sell_total += _parse_numeric_cell(value_item)
 
-            # Admin/Misc Sell is distributed as the Bid Total remainder, so adding
-            # Allowances separately here would double-count that component.
-            working_sell_kpi = total_sell_sum + admin_misc_sell_total
+            allowances_kpi = _read_allowances_total()
+            # Exclude allowances from Working Sell since they are shown separately.
+            working_sell_kpi = total_sell_sum + admin_misc_sell_total - allowances_kpi
             ohp_pct_kpi = _read_financials_ohp_pct()
             admin_misc_cost_kpi = _read_admin_misc_total_cost()
-            allowances_kpi = _read_allowances_total()
 
             total_openings_kpi = total_openings_all
             if total_openings_kpi.is_integer():
@@ -22526,6 +22651,9 @@ class MainWindow(QMainWindow):
                 schedule_kpi_admin_misc_label.setText(f"${admin_misc_cost_kpi:,.2f}")
             if schedule_kpi_allowances_label is not None:
                 schedule_kpi_allowances_label.setText(f"${allowances_kpi:,.2f}")
+            if schedule_kpi_avg_sell_label is not None:
+                avg_sell_per_opening = (working_sell_kpi / total_openings_kpi) if total_openings_kpi > 0 else 0.0
+                schedule_kpi_avg_sell_label.setText(f"${avg_sell_per_opening:,.2f}")
 
         selection_summary_timer = QTimer(dlg)
         selection_summary_timer.setSingleShot(True)

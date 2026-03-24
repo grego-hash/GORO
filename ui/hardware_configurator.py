@@ -252,7 +252,10 @@ class HardwareConfiguratorDialog(QDialog):
                 self.family_combo.setCurrentIndex(i)
                 break
 
-        # Restore slot selections
+        # Block signals during restoration to prevent cascade rebuilds
+        for combo in self._slot_combos.values():
+            combo.blockSignals(True)
+
         for slot_name, value in selections.items():
             combo = self._slot_combos.get(slot_name)
             if combo is None:
@@ -261,6 +264,9 @@ class HardwareConfiguratorDialog(QDialog):
                 if combo.itemData(i) == value:
                     combo.setCurrentIndex(i)
                     break
+
+        for combo in self._slot_combos.values():
+            combo.blockSignals(False)
 
         self._refresh_all_slots()
         self._update_preview()

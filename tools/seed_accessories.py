@@ -4,10 +4,10 @@ from seed_helpers import fid, slot, options, restrict, rule, conflict_all
 
 
 def seed(conn):
-    _seed_ives(conn)
+    # Ives accessories now seeded via seed_ives_pricebook.py (Batch 9)
     _seed_hager_hinges(conn)
     _seed_pemko(conn)
-    print("  Ives + Hager + Pemko seeded.")
+    print("  Hager + Pemko seeded.")
 
 
 # ═════════════════════════════════════════════════════════════════════

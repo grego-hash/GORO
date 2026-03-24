@@ -238,6 +238,56 @@ def get_valid_options(
         if conflicted_values:
             valid = [o for o in valid if o["value"] not in conflicted_values]
 
+        # ── Pricing-aware filtering for compound keys ──────────────
+        # When pricing uses compound keys (e.g. "model:size:finish"),
+        # filter this slot's options to only those that appear in at
+        # least one pricing row compatible with the current selections.
+        pricing_rows = conn.execute(
+            "SELECT slot_name, slot_value FROM hw_pricing WHERE family_id = ?",
+            (family_id,),
+        ).fetchall()
+
+        compound_rows = [r for r in pricing_rows if ":" in r["slot_name"]]
+        if compound_rows:
+            # Find compound keys that include this slot
+            relevant = [
+                r for r in compound_rows
+                if slot_name in r["slot_name"].split(":")
+            ]
+            if relevant:
+                compatible_values: set = set()
+                for r in relevant:
+                    parts = r["slot_name"].split(":")
+                    vals = r["slot_value"].split(":")
+                    if len(parts) != len(vals):
+                        continue
+                    kv = dict(zip(parts, vals))
+
+                    # Check that all OTHER selected slots match
+                    match = True
+                    for p, v in kv.items():
+                        if p == slot_name:
+                            continue
+                        sel = selections.get(p)
+                        if sel is not None and sel != v:
+                            match = False
+                            break
+
+                    if match:
+                        compatible_values.add(kv[slot_name])
+
+                # Also include values that have simple (non-compound)
+                # pricing — compound rows are adders, not the full set.
+                simple_values = {
+                    r["slot_value"]
+                    for r in pricing_rows
+                    if r["slot_name"] == slot_name
+                }
+                compatible_values |= simple_values
+
+                if compatible_values:
+                    valid = [o for o in valid if o["value"] in compatible_values]
+
         return valid
     finally:
         conn.close()

@@ -5,8 +5,8 @@ from seed_helpers import fid, slot, options, restrict, rule, conflict_all
 
 def seed(conn):
     _seed_ngp(conn)
-    _seed_zero(conn)
-    print("  NGP + Zero International seeded.")
+    # Zero International now seeded via seed_zero_pricebook.py (Batch 10)
+    print("  NGP seeded.")
 
 
 # ═════════════════════════════════════════════════════════════════════

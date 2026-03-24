@@ -10,7 +10,7 @@ Labor Total:,,,"=SUM(D7,D8)"
 OT Rate:,=SUM(import[Total OT Hours]),0,=B10*C10
 Parking:,=D9/C7/8,50,"=PRODUCT(B11,C11)"
 Supervision:,,0.15,"=PRODUCT(D9,C12)"
-Deliveries:,0,2,"=PRODUCT(B13,C13,C7)"
+Delivery/Stocking/Clean Up:,0,=C7,=B13*C13
 Hard Cost Total:,,,"=SUM(D6,D9:D13)"
 OH & P:,,0.25,=(D14/(1-[@Rate]))-D14
 SUB Hard Cost Total:,,,0

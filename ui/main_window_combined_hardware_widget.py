@@ -82,6 +82,8 @@ class CombinedHardwareWidget(QWidget):
         self.hardware_part_id_col_idx = None
         self.hardware_config_data_col_idx = None
         self.hardware_groups_part_id_col_idx = None
+        self._hw_sort_col = -1
+        self._hw_sort_order = Qt.SortOrder.AscendingOrder
         self.hardware_table: NoRowHeaderTable
         self._hardware_paste_filter: HardwarePasteEventFilter | None = None
         self.hardware_filter_edit: QLineEdit
@@ -628,6 +630,10 @@ class CombinedHardwareWidget(QWidget):
             self.hardware_table.cellDoubleClicked.disconnect(self._on_hardware_cell_double_clicked)
         except Exception:
             pass
+        try:
+            self.hardware_table.horizontalHeader().sectionClicked.disconnect(self._on_hardware_header_clicked)
+        except Exception:
+            pass
 
         self.hardware_table.blockSignals(True)
         self.hardware_table.setSortingEnabled(False)
@@ -819,7 +825,9 @@ class CombinedHardwareWidget(QWidget):
                 prep_delegate = PrepCodeDelegate(prep_db, cat_col_in_table, self.hardware_table)
                 self.hardware_table.setItemDelegateForColumn(prep_code_col_idx + 1, prep_delegate)
 
-        self.hardware_table.setSortingEnabled(True)
+        self.hardware_table.setSortingEnabled(False)
+        self.hardware_table.horizontalHeader().setSortIndicatorShown(True)
+        self.hardware_table.horizontalHeader().sectionClicked.connect(self._on_hardware_header_clicked)
         self.apply_hardware_filter()
         self.hardware_table.blockSignals(False)
         # Recalculate Material Cost for rows that have a List Price
@@ -954,6 +962,7 @@ class CombinedHardwareWidget(QWidget):
         vendor_col = self._get_header_index(self.hardware_all_headers, "vendor")
         list_price_col = self._get_header_index(self.hardware_all_headers, "list price")
         prep_code_col = self._get_header_index(self.hardware_all_headers, "prep code")
+        field_labor_col = self._get_header_index(self.hardware_all_headers, "field labor")
         for data_col in range(len(self.hardware_all_headers)):
             table_col = data_col + 1
             item = table.item(row_idx, table_col)
@@ -966,6 +975,9 @@ class CombinedHardwareWidget(QWidget):
                 continue
             # Prep Code stays editable on configured rows
             if data_col == prep_code_col:
+                continue
+            # Field Labor stays editable on configured rows
+            if data_col == field_labor_col:
                 continue
             # Keep calculated / internal columns as-is
             if data_col in (self.hardware_part_id_col_idx, self.hardware_count_col_idx, self.hardware_config_data_col_idx):
@@ -1318,6 +1330,81 @@ class CombinedHardwareWidget(QWidget):
             last_row_idx = table.rowCount() - 1
 
         self._initialize_hardware_table_row(last_row_idx)
+
+    def _on_hardware_header_clicked(self, logical_index):
+        """Custom sort that keeps blank rows at the bottom."""
+        if not self.hardware_table:
+            return
+
+        table = self.hardware_table
+        col_count = table.columnCount()
+        if logical_index < 0 or logical_index >= col_count:
+            return
+
+        # Toggle sort order when clicking the same column
+        if logical_index == self._hw_sort_col:
+            self._hw_sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if self._hw_sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+        else:
+            self._hw_sort_col = logical_index
+            self._hw_sort_order = Qt.SortOrder.AscendingOrder
+
+        table.horizontalHeader().setSortIndicator(logical_index, self._hw_sort_order)
+
+        # Separate non-blank and blank rows
+        non_blank_indices = []
+        blank_indices = []
+        for row_idx in range(table.rowCount()):
+            if self._is_hardware_row_blank(row_idx):
+                blank_indices.append(row_idx)
+            else:
+                non_blank_indices.append(row_idx)
+
+        if not non_blank_indices:
+            return
+
+        # Take all items out of the table
+        all_row_items = []
+        for row_idx in range(table.rowCount()):
+            row_data = []
+            for col_idx in range(col_count):
+                row_data.append(table.takeItem(row_idx, col_idx))
+            all_row_items.append(row_data)
+
+        # Build sort key for non-blank rows
+        def sort_key(row_idx):
+            item = all_row_items[row_idx][logical_index]
+            text = item.text().strip() if item else ""
+            # Try numeric sort first
+            try:
+                cleaned = text.lstrip("$").replace(",", "")
+                return (0, float(cleaned), text.lower())
+            except (ValueError, AttributeError):
+                return (1, 0.0, text.lower())
+
+        reverse = self._hw_sort_order == Qt.SortOrder.DescendingOrder
+        non_blank_indices.sort(key=sort_key, reverse=reverse)
+
+        # Rebuild: non-blank rows in sorted order, then exactly one blank row
+        ordered = non_blank_indices + blank_indices
+        desired_rows = len(non_blank_indices) + 1
+        table.blockSignals(True)
+        try:
+            table.setRowCount(max(table.rowCount(), desired_rows))
+            for new_row, src_row in enumerate(ordered[:desired_rows]):
+                for col_idx, item in enumerate(all_row_items[src_row]):
+                    if item is not None:
+                        table.setItem(new_row, col_idx, item)
+            # Trim any extra rows
+            table.setRowCount(desired_rows)
+            self._initialize_hardware_table_row(desired_rows - 1)
+        finally:
+            table.blockSignals(False)
+
+        self.apply_hardware_filter()
 
     def apply_hardware_filter(self):
         """Apply text filter to Hardware - All Parts rows."""
@@ -2803,6 +2890,19 @@ class CombinedHardwareWidget(QWidget):
         self.changes_made = True
         self.save_data()
     
+    # Category priority tiers for group parts display order.
+    # Tier 0 = hinges/hanging devices (top), Tier 1 = locksets/panics, Tier 2 = everything else.
+    _GROUP_CATEGORY_PRIORITY = {
+        "hinge": 0, "spring hinge": 0, "continuous hinge": 0,
+        "hospital hinge": 0, "electric hinge": 0, "pivot": 0,
+        "lock": 1, "mortise lock": 1, "mortise lockset": 1,
+        "cylindrical lock": 1, "cylindrical lockset": 1,
+        "tubular lockset": 1, "deadbolt": 1,
+        "panic": 1, "exit device": 1, "narrow stile exit device": 1,
+        "exit alarm": 1, "keypad lock": 1, "electronic lock": 1,
+        "electric strike": 1, "electromagnetic lock": 1,
+    }
+
     def load_group_parts(self):
         """Load hardware parts for the selected group."""
         self.parts_table.blockSignals(True)
@@ -2818,7 +2918,8 @@ class CombinedHardwareWidget(QWidget):
         part_id_idx = self._get_header_index(self.hardware_groups_headers, "Part ID")
         qty_indices = self._get_hardware_groups_qty_indices()
 
-        # Load parts for this group from hardware_groups_data
+        # Collect parts for this group first so we can sort by category
+        collected_parts = []
         for row in self.hardware_groups_rows:
             row_group = row[group_idx].strip() if len(row) > group_idx else ""
             if row_group == self.current_group:
@@ -2826,25 +2927,7 @@ class CombinedHardwareWidget(QWidget):
                 part_name = self._get_part_name_for_id(part_id) if part_id else ""
                 count = self._read_hardware_group_row_qty(row, qty_indices)
                 
-                if part_name:  # Only add rows with part names
-                    row_idx = self.parts_table.rowCount()
-                    self.parts_table.setRowCount(row_idx + 1)
-                    
-                    # Checkbox in first column
-                    checkbox_item = QTableWidgetItem()
-                    checkbox_item.setFlags(checkbox_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    checkbox_item.setCheckState(Qt.CheckState.Unchecked)
-                    checkbox_item.setText("")
-                    self.parts_table.setItem(row_idx, 0, checkbox_item)
-                    
-                    # Hardware Part (read-only)
-                    part_item = QTableWidgetItem(part_name)
-                    part_item.setFlags(part_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    if part_id:
-                        part_item.setData(Qt.ItemDataRole.UserRole, part_id)
-                    self.parts_table.setItem(row_idx, 1, part_item)
-                    
-                    # Get MFR, Finish, Category, Prep Code from Hardware table by Part ID
+                if part_name:
                     mfr = ""
                     finish = ""
                     category = ""
@@ -2855,30 +2938,54 @@ class CombinedHardwareWidget(QWidget):
                         finish = hw_row.get("finish", "")
                         category = hw_row.get("category", "")
                         prep_code = hw_row.get("prep code", "")
-                    
-                    # MFR (read-only)
-                    mfr_item = QTableWidgetItem(mfr)
-                    mfr_item.setFlags(mfr_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.parts_table.setItem(row_idx, 2, mfr_item)
-                    
-                    # Finish (read-only)
-                    finish_item = QTableWidgetItem(finish)
-                    finish_item.setFlags(finish_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.parts_table.setItem(row_idx, 3, finish_item)
-                    
-                    # Category (read-only)
-                    category_item = QTableWidgetItem(category)
-                    category_item.setFlags(category_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.parts_table.setItem(row_idx, 4, category_item)
-                    
-                    # Prep Code (read-only — edit via hardware table)
-                    prep_code_item = QTableWidgetItem(prep_code)
-                    prep_code_item.setFlags(prep_code_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.parts_table.setItem(row_idx, 5, prep_code_item)
-                    
-                    # COUNT (editable)
-                    count_item = QTableWidgetItem(count)
-                    self.parts_table.setItem(row_idx, 6, count_item)
+                    collected_parts.append((part_id, part_name, mfr, finish, category, prep_code, count))
+
+        # Sort: hinges/hanging first, then locksets/panics, then everything else
+        priority = self._GROUP_CATEGORY_PRIORITY
+        collected_parts.sort(key=lambda p: (priority.get(p[4].strip().lower(), 2), p[4].lower(), p[1].lower()))
+
+        # Populate table
+        for part_id, part_name, mfr, finish, category, prep_code, count in collected_parts:
+            row_idx = self.parts_table.rowCount()
+            self.parts_table.setRowCount(row_idx + 1)
+            
+            # Checkbox in first column
+            checkbox_item = QTableWidgetItem()
+            checkbox_item.setFlags(checkbox_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            checkbox_item.setCheckState(Qt.CheckState.Unchecked)
+            checkbox_item.setText("")
+            self.parts_table.setItem(row_idx, 0, checkbox_item)
+            
+            # Hardware Part (read-only)
+            part_item = QTableWidgetItem(part_name)
+            part_item.setFlags(part_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if part_id:
+                part_item.setData(Qt.ItemDataRole.UserRole, part_id)
+            self.parts_table.setItem(row_idx, 1, part_item)
+            
+            # MFR (read-only)
+            mfr_item = QTableWidgetItem(mfr)
+            mfr_item.setFlags(mfr_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.parts_table.setItem(row_idx, 2, mfr_item)
+            
+            # Finish (read-only)
+            finish_item = QTableWidgetItem(finish)
+            finish_item.setFlags(finish_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.parts_table.setItem(row_idx, 3, finish_item)
+            
+            # Category (read-only)
+            category_item = QTableWidgetItem(category)
+            category_item.setFlags(category_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.parts_table.setItem(row_idx, 4, category_item)
+            
+            # Prep Code (read-only — edit via hardware table)
+            prep_code_item = QTableWidgetItem(prep_code)
+            prep_code_item.setFlags(prep_code_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.parts_table.setItem(row_idx, 5, prep_code_item)
+            
+            # COUNT (editable)
+            count_item = QTableWidgetItem(count)
+            self.parts_table.setItem(row_idx, 6, count_item)
         
         self.parts_table.blockSignals(False)
         self._refresh_prep_string_label()

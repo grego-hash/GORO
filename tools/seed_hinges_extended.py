@@ -5,9 +5,9 @@ from seed_helpers import fid, slot, options, restrict, rule, conflict_all
 
 def seed(conn):
     _seed_mckinney(conn)
-    _seed_ives_hinges(conn)
+    # Ives hinges now seeded via seed_ives_pricebook.py (Batch 9)
     _seed_abh(conn)
-    print("  McKinney + Ives Hinges + ABH seeded.")
+    print("  McKinney + ABH seeded.")
 
 
 # ═════════════════════════════════════════════════════════════════════

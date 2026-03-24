@@ -1,0 +1,74 @@
+model,plate_type,material,finish,price
+KA038,Armor Plate,.038",630,26.60
+KA050,Armor Plate,.050",606,101.90
+KA050,Armor Plate,.050",613,101.90
+KA050,Armor Plate,.050",613E,41.10
+KA050,Armor Plate,.050",622,41.10
+KA050,Armor Plate,.050",628,26.90
+KA050,Armor Plate,.050",629,91.80
+KA050,Armor Plate,.050",630,26.60
+KA050,Armor Plate,.050",710,154.00
+KA050,Armor Plate,.050",SPECIAL,114.40
+KA064,Armor Plate,.064",606,107.90
+KA064,Armor Plate,.064",613,107.90
+KA064,Armor Plate,.064",613E,44.20
+KA064,Armor Plate,.064",622,44.50
+KA064,Armor Plate,.064",630,31.40
+KA125,Armor Plate,.125",628,81.50
+KM038,Mop Plate,.038",630,28.60
+KM050,Mop Plate,.050",606,96.30
+KM050,Mop Plate,.050",613,96.30
+KM050,Mop Plate,.050",613E,43.60
+KM050,Mop Plate,.050",622,43.60
+KM050,Mop Plate,.050",628,27.50
+KM050,Mop Plate,.050",629,96.30
+KM050,Mop Plate,.050",630,28.60
+KM050,Mop Plate,.050",710,147.20
+KM050,Mop Plate,.050",SPECIAL,117.80
+KM064,Mop Plate,.064",606,117.80
+KM064,Mop Plate,.064",613,117.80
+KM064,Mop Plate,.064",613E,46.40
+KM064,Mop Plate,.064",622,46.40
+KM064,Mop Plate,.064",630,33.70
+KM125,Mop Plate,.125",628,83.80
+K0038,Kick Plate,.038",630,26.60
+K0050,Kick Plate,.050",606,91.80
+K0050,Kick Plate,.050",613,91.80
+K0050,Kick Plate,.050",613E,91.80
+K0050,Kick Plate,.050",622,41.10
+K0050,Kick Plate,.050",628,26.90
+K0050,Kick Plate,.050",629,91.80
+K0050,Kick Plate,.050",630,26.60
+K0050,Kick Plate,.050",710,154.00
+K0050,Kick Plate,.050",SPECIAL,114.40
+K0064,Kick Plate,.064",606,107.60
+K0064,Kick Plate,.064",613,107.60
+K0064,Kick Plate,.064",613E,107.60
+K0064,Kick Plate,.064",622,44.20
+K0064,Kick Plate,.064",630,31.40
+K0125,Kick Plate,.125",628,81.50
+KS050,Stretcher Plate,.050",606,101.90
+KS050,Stretcher Plate,.050",613,101.90
+KS050,Stretcher Plate,.050",613E,53.80
+KS050,Stretcher Plate,.050",622,53.80
+KS050,Stretcher Plate,.050",628,34.80
+KS050,Stretcher Plate,.050",629,35.40
+KS050,Stretcher Plate,.050",630,35.40
+KS050,Stretcher Plate,.050",710,209.50
+KS050,Stretcher Plate,.050",SPECIAL,151.80
+KS064,Stretcher Plate,.064",606,120.10
+KS064,Stretcher Plate,.064",613,120.10
+KS064,Stretcher Plate,.064",613E,53.20
+KS064,Stretcher Plate,.064",622,53.20
+KS064,Stretcher Plate,.064",630,41.30
+KH050,Handicap Kick Plate,.050",613,192.70
+KH050,Handicap Kick Plate,.050",630,140.40
+KE050,Self-Illuminated Exit Sign,.050",630,479.00
+K6000,Plastic Kick Plate,1/8",Black,18.10
+K6000,Plastic Kick Plate,1/8",Nubia Brown,19.50
+K6000,Plastic Kick Plate,1/8",Clear Plastic,20.40
+K6000,Plastic Kick Plate,1/8",Khaki Brown,24.10
+K6000,Plastic Kick Plate,1/8",Beige,24.10
+K6000,Plastic Kick Plate,1/8",Grey,24.10
+K6000,Plastic Kick Plate,1/8",Dove Grey,24.10
+K6000,Plastic Kick Plate,1/8",Frosty White,24.10

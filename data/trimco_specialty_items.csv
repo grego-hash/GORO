@@ -1,0 +1,38 @@
+model,description,finish,price
+UHF111,Ultimate Slide Lock,630,200.4
+UHF211,Ultimate Slide Lock,630,703.0
+LDH100-PHI,Precision - Lockdown Hardware,605,295.7
+LDH100-PHI,Precision - Lockdown Hardware,690,295.7
+LDH100-PHI,Precision - Lockdown Hardware,625,295.7
+LDH100-PHI,Precision - Lockdown Hardware,626,262.8
+LDH100-DM,Dorma - Lockdown Hardware,605,295.7
+LDH100-DM,Dorma - Lockdown Hardware,690,295.7
+LDH100-DM,Dorma - Lockdown Hardware,625,295.7
+LDH100-DM,Dorma - Lockdown Hardware,626,262.8
+LDH100-VD,Von Duprin - Lockdown Hardware,605,295.7
+LDH100-VD,Von Duprin - Lockdown Hardware,690,295.7
+LDH100-VD,Von Duprin - Lockdown Hardware,625,295.7
+LDH100-VD,Von Duprin - Lockdown Hardware,626,262.8
+UFP,Ultimate Foot Pull,316S,76.6
+UFP,Ultimate Foot Pull,622,90.9
+UFP,Ultimate Foot Pull,710CU,139.1
+UCT1-18x18,Std Duty (Cork),630,407.0
+UCT1-18x18-HD,Heavy Duty (Cork),630,877.0
+UCT1-24x24,Std Duty (Cork),630,699.0
+UCT1-24x24-HD,Heavy Duty (Cork),630,1533.0
+UCT1-30x30,Std Duty (Cork),630,1073.0
+UCT1-30x30-HD,Heavy Duty (Cork),630,2375.0
+UCT1-18x24,Std Duty (Cork),630,533.0
+UCT1-18x24-HD,Heavy Duty (Cork),630,1158.0
+UCT1-20x34,Std Duty (Cork),630,819.0
+UCT1-24x34,Std Duty (Cork),630,975.0
+UCT1-18x18,Std Duty (NoTape),630,394.0
+UCT1-18x18-HD,Heavy Duty (NoTape),630,863.0
+UCT1-24x24,Std Duty (NoTape),630,675.0
+UCT1-24x24-HD,Heavy Duty (NoTape),630,1509.0
+UCT1-30x30,Std Duty (NoTape),630,1034.0
+UCT1-30x30-HD,Heavy Duty (NoTape),630,2338.0
+UCT1-18x24,Std Duty (NoTape),630,514.0
+UCT1-18x24-HD,Heavy Duty (NoTape),630,1140.0
+UCT1-20x34,Std Duty (NoTape),630,790.0
+UCT1-24x34,Std Duty (NoTape),630,941.0

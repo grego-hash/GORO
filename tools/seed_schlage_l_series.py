@@ -295,6 +295,7 @@ def _seed_l_series_lock(conn):
         ("09-900", "09-900 - Thumbturn, No Collar"),
         ("09-904", "09-904 - Thumbturn w/ Compression Ring & Spring"),
         ("09-905", "09-905 - Thumbturn w/ Compression Ring, Spring & Blocking Ring"),
+        ("09-509xL583-363", "09-509 x L583-363 - Large ADA Thumbturn"),
     ]
     _options(conn, fid, "thumbturn", thumbturn_options)
 
@@ -851,15 +852,18 @@ def _seed_thumbturn_cylinders(conn):
         ("NONE",        "09-900 - None (standard)"),
         ("COMP_SPRING", "09-904 - Compression Ring & Spring"),
         ("COMP_BLOCK",  "09-905 - Compression Ring, Spring & 1/8\" Blocking Ring"),
+        ("ADA_LARGE",   "09-509 x L583-363 - Large ADA Thumbturn"),
     ])
 
     _options(conn, fid, "part_number", [
         ("09-900", "09-900"),
         ("09-904", "09-904"),
         ("09-905", "09-905"),
+        ("09-509xL583-363", "09-509 x L583-363"),
     ])
 
-    for collar, pn in [("NONE", "09-900"), ("COMP_SPRING", "09-904"), ("COMP_BLOCK", "09-905")]:
+    for collar, pn in [("NONE", "09-900"), ("COMP_SPRING", "09-904"), ("COMP_BLOCK", "09-905"),
+                        ("ADA_LARGE", "09-509xL583-363")]:
         _rule(conn, fid, "require", "collar", collar, "part_number", pn,
               f"Collar maps to {pn}")
 

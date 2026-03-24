@@ -34,8 +34,9 @@ _4701K = [v for v, _ in F_4701]
 def _exit_device(conn, name, desc, cat, size_opts, finish_opts, pricing_data,
                  finish_keys):
     """Create an exit device family with compound size:finish pricing."""
+    pfx = name.split()[0]
     f = fid(conn, "Hager", name, cat,
-            "{size} {finish}",
+            f"{pfx} {{size}} {{finish}}",
             f"Hager {desc} {{size}} {{finish}}")
     slot(conn, f, 1, "size", "Size", 1)
     slot(conn, f, 2, "finish", "Finish", 1)

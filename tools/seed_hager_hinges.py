@@ -8,6 +8,12 @@ Models:  BB1279 (Steel BB5K Std Wt), BB1168 (Steel BB5K Hvy Wt),
 
 from seed_helpers import fid, slot, options, price
 
+# ── Hinge suffix options (ETW / NRP) ────────────────
+ETW_NRP_OPTS = [
+    ("ETW", "ETW - Electric Transfer Wire"),
+    ("NRP", "NRP - Non-Removable Pin"),
+]
+
 # ── Common finish option lists ──────────────────────
 STEEL_F = [
     ("LS",    "LS - Lustre Steel"),
@@ -45,15 +51,18 @@ _BF7 = [v for v, _ in BRASS_F]
 
 
 def _hinge(conn, name, desc_extra, cat, sizes_opts, finish_opts, pricing_data,
-           finish_keys):
+           finish_keys, model_prefix=None):
     """Create a hinge family with compound size:finish pricing."""
+    pfx = model_prefix or name.split()[0]
     f = fid(conn, "Hager", name, cat,
-            "{size} {finish}",
+            f"{pfx} {{size}} {{finish}}",
             f"Hager {desc_extra} {{size}} {{finish}}")
     slot(conn, f, 1, "size", "Size", 1)
     slot(conn, f, 2, "finish", "Finish", 1)
+    slot(conn, f, 3, "suffix", "Options", 0)
     options(conn, f, "size", sizes_opts)
     options(conn, f, "finish", finish_opts)
+    options(conn, f, "suffix", ETW_NRP_OPTS)
     for sz_key, prices in pricing_data:
         fk = finish_keys
         # some sizes have extra L1 column at end
@@ -302,12 +311,14 @@ def _seed_bb1279(conn):
 
 def _seed_bb1168(conn):
     f = fid(conn, "Hager", "BB1168 Full Mortise Hinge", "Hinge",
-            "{size} {finish}",
+            "BB1168 {size} {finish}",
             "Hager BB1168 Steel BB5K Full Mortise Hvy Wt {size} {finish}")
     slot(conn, f, 1, "size", "Size", 1)
     slot(conn, f, 2, "finish", "Finish", 1)
+    slot(conn, f, 3, "suffix", "Options", 0)
     options(conn, f, "size", SZ_BB1168)
     options(conn, f, "finish", _1168F + [("L1", "L1 - Flat Black")])
+    options(conn, f, "suffix", ETW_NRP_OPTS)
     fk = [v for v, _ in _1168F]
     for sz, prices in BB1168_DATA:
         keys = fk if len(prices) == len(fk) else fk + ["L1"]
@@ -354,8 +365,10 @@ def _seed_ecbb1100(conn):
             "Hager ECBB1100 ECCO Steel BB Full Mortise Std Wt {size} {finish}")
     slot(conn, f, 1, "size", "Size", 1)
     slot(conn, f, 2, "finish", "Finish", 1)
+    slot(conn, f, 3, "suffix", "Options", 0)
     options(conn, f, "size", _EC_SIZES)
     options(conn, f, "finish", _EC_FINISHES)
+    options(conn, f, "suffix", ETW_NRP_OPTS)
     for sz, prices in ECBB1100_DATA:
         for fin, amt in zip(_ECK, prices):
             if amt is not None:
@@ -368,8 +381,10 @@ def _seed_1251(conn):
             "Hager 1251 Steel Spring Hinge 1/4\" Radius {size} {finish}")
     slot(conn, f, 1, "size", "Size", 1)
     slot(conn, f, 2, "finish", "Finish", 1)
+    slot(conn, f, 3, "suffix", "Options", 0)
     options(conn, f, "size", SZ_1251)
     options(conn, f, "finish", _1251F)
+    options(conn, f, "suffix", ETW_NRP_OPTS)
     for sz, prices in P1251_DATA:
         for fin, amt in zip(_1251K, prices):
             if amt is not None:
