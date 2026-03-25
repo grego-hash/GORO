@@ -8,7 +8,7 @@ from PyQt6.QtGui import QColor
 
 ORG_NAME = "OropezaApps"
 APP_NAME = "GORO 2.3"
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.8.1"
 APP_ID = "OropezaApps.GORO"
 APP_DISPLAY_NAME = f"GORO {APP_VERSION}"
 
@@ -116,6 +116,7 @@ DEFAULT_HW_LABOR_MAP = (
     "Access Switch=0.5\n"
     "Actuator=0.5"
 )
+
 
 
 
