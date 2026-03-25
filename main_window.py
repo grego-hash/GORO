@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QToolBar, QStatusBar, QMenu, QDialog, QComboBox, QDateEdit, QTextEdit, QScrollArea, QFrame,
     QAbstractItemView, QTabWidget, QButtonGroup, QRadioButton, QGraphicsScene, QGraphicsView,
     QGraphicsRectItem, QDialogButtonBox, QTableWidget, QTableWidgetItem, QCheckBox, QHeaderView,
-    QStyledItemDelegate, QStyleOptionViewItem, QStyle, QToolButton, QSizePolicy, QTableWidgetSelectionRange, QGroupBox,
+    QStyledItemDelegate, QStyleOptionViewItem, QStyle, QToolButton, QSizePolicy, QTableWidgetSelectionRange, QGroupBox, QSpinBox,
     QStackedWidget, QCalendarWidget, QProgressBar, QTreeWidget, QTreeWidgetItem, QTableView
 )
 
@@ -12594,6 +12594,112 @@ class MainWindow(QMainWindow):
         except Exception:
             return None
 
+    def _duplicate_rows_with_dialog(
+        self,
+        table: QTableWidget,
+        source_row: int,
+        table_headers: list,
+        duplicate_rows_fn,
+        mark_changed_fn,
+    ) -> None:
+        """Show a dialog asking how many copies and what suffix style, then duplicate."""
+        # Find the mark / opening-number column in the table headers
+        mark_col_idx: int | None = None
+        mark_keywords = {"opening number", "opening #", "opening", "mark", "door #", "frame #"}
+        for idx in range(table.columnCount()):
+            hdr_item = table.horizontalHeaderItem(idx)
+            if hdr_item and hdr_item.text().strip().lower() in mark_keywords:
+                mark_col_idx = idx
+                break
+
+        source_mark = ""
+        if mark_col_idx is not None:
+            src_item = table.item(source_row, mark_col_idx)
+            source_mark = src_item.text().strip() if src_item else ""
+
+        # --- Build dialog ---
+        dlg = QDialog(table.window())
+        dlg.setWindowTitle("Duplicate Row")
+        layout = QVBoxLayout(dlg)
+
+        layout.addWidget(QLabel(f"Duplicating row {source_row + 1}"
+                                + (f"  (Mark: {source_mark})" if source_mark else "")))
+
+        # Number of copies
+        count_layout = QHBoxLayout()
+        count_layout.addWidget(QLabel("Number of copies:"))
+        count_spin = QSpinBox()
+        count_spin.setRange(1, 999)
+        count_spin.setValue(1)
+        count_layout.addWidget(count_spin)
+        layout.addLayout(count_layout)
+
+        # Suffix style
+        suffix_group = QGroupBox("Mark suffix")
+        suffix_layout = QVBoxLayout(suffix_group)
+        btn_group = QButtonGroup(dlg)
+        rb_none = QRadioButton("No suffix  (same mark for every copy)")
+        rb_letter = QRadioButton("Lettered   (a, b, c …)")
+        rb_number = QRadioButton("Numbered  (.1, .2, .3 …)")
+        rb_none.setChecked(True)
+        for rb in (rb_none, rb_letter, rb_number):
+            btn_group.addButton(rb)
+            suffix_layout.addWidget(rb)
+        layout.addWidget(suffix_group)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        num_copies = count_spin.value()
+        if rb_letter.isChecked():
+            suffix_mode = "letter"
+        elif rb_number.isChecked():
+            suffix_mode = "number"
+        else:
+            suffix_mode = "none"
+
+        # --- Perform duplication ---
+        table.blockSignals(True)
+        try:
+            for i in range(num_copies):
+                insert_at = source_row + 1 + i
+                table.insertRow(insert_at)
+                for c in range(table.columnCount()):
+                    src_item = table.item(source_row, c)
+                    if src_item is None:
+                        continue
+                    try:
+                        new_item = src_item.clone()
+                    except Exception:
+                        new_item = QTableWidgetItem(src_item.text())
+                        new_item.setFlags(src_item.flags())
+                        if src_item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                            new_item.setCheckState(src_item.checkState())
+                    table.setItem(insert_at, c, new_item)
+
+                # Apply suffix to the mark column
+                if mark_col_idx is not None and source_mark and suffix_mode != "none":
+                    if suffix_mode == "letter":
+                        suffix = chr(ord("a") + i) if i < 26 else chr(ord("a") + (i // 26) - 1) + chr(ord("a") + (i % 26))
+                    else:
+                        suffix = f".{i + 1}"
+                    mark_item = table.item(insert_at, mark_col_idx)
+                    if mark_item is None:
+                        mark_item = QTableWidgetItem()
+                        table.setItem(insert_at, mark_col_idx, mark_item)
+                    mark_item.setText(f"{source_mark}{suffix}")
+        finally:
+            table.blockSignals(False)
+
+        mark_changed_fn()
+
     def _open_cell_calculator(self, table: QTableWidget, row: int, col: int, change_callback=None):
         """Open calculator dialog and write evaluated result into the target cell."""
         existing_item = table.item(row, col)
@@ -13726,6 +13832,7 @@ class MainWindow(QMainWindow):
         financials_kpi_labels = {}
         financials_kpi_values = {}
         financials_secondary_kpi_labels = {}
+        financials_budget_labels = {}
         financials_opening_labels = {}
         financials_breakout_combo = None
         financials_breakout_title = None
@@ -13923,6 +14030,201 @@ class MainWindow(QMainWindow):
                 ohp_pct = (ohp_total / bid_total * 100.0) if bid_total > 0 else 0.0
                 financials_secondary_kpi_labels["ohp_total"].setText(f"${ohp_total:,.0f}")
                 financials_secondary_kpi_labels["ohp_pct_bid"].setText(f"{ohp_pct:.1f}%")
+
+            # Update budget section after KPIs are refreshed.
+            _update_budget_section()
+
+        def get_schedule_totals_by_category():
+            """Return (door_cost, frame_cost, hw_cost, door_labor, frame_labor, hw_labor) from Schedule."""
+            schedule_tbl = None
+            schedule_hdrs = None
+            for t, path, hdrs, _ in tables_data:
+                if isinstance(t, QTableWidget) and hasattr(path, "stem"):
+                    if "schedule" in path.stem.lower() and "hardware" not in path.stem.lower():
+                        schedule_tbl = t
+                        schedule_hdrs = hdrs
+                        break
+            if schedule_tbl is None or schedule_hdrs is None:
+                return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+            header_map = {h.strip().lower(): i for i, h in enumerate(schedule_hdrs) if h is not None}
+            table_col_offset = 1 if schedule_tbl.columnCount() == len(schedule_hdrs) + 1 else 0
+
+            def _sum_col(col_name):
+                col_idx = header_map.get(col_name)
+                if col_idx is None:
+                    return 0.0
+                total = 0.0
+                for r in range(schedule_tbl.rowCount()):
+                    item = schedule_tbl.item(r, col_idx + table_col_offset)
+                    total += _parse_financials_number(item.text()) if item else 0.0
+                return total
+
+            return (
+                _sum_col("door cost"),
+                _sum_col("frame cost"),
+                _sum_col("hardware cost"),
+                _sum_col("door labor"),
+                _sum_col("frame labor"),
+                _sum_col("hardware labor"),
+            )
+
+        def get_admin_misc_budget_totals():
+            """Return (material_total, regular_hours, ot_hours) from Admin/Misc Cost table."""
+            admin_tbl = None
+            admin_hdrs = None
+            for widget, path, hdrs, _ in tables_data:
+                if hasattr(path, "stem") and "admin_misc_cost" in path.stem.lower():
+                    if hasattr(widget, "_table"):
+                        admin_tbl = widget._table
+                    elif isinstance(widget, QTableWidget):
+                        admin_tbl = widget
+                    admin_hdrs = hdrs
+                    break
+            if admin_tbl is None or admin_hdrs is None:
+                return 0.0, 0.0, 0.0
+
+            material_total_col = None
+            count_col = None
+            hours_col = None
+            ot_hours_col = None
+            for idx, header in enumerate(admin_hdrs):
+                header_lower = header.strip().lower()
+                if header_lower == "material total":
+                    material_total_col = idx
+                elif header_lower == "count":
+                    count_col = idx
+                elif header_lower == "hours per unit":
+                    hours_col = idx
+                elif header_lower == "ot hours per unit":
+                    ot_hours_col = idx
+
+            material_total_sum = 0.0
+            if material_total_col is not None:
+                for r in range(admin_tbl.rowCount()):
+                    item = admin_tbl.item(r, material_total_col)
+                    if item:
+                        material_total_sum += _parse_financials_number(item.text())
+
+            regular_hours_sum = 0.0
+            if count_col is not None and hours_col is not None:
+                for r in range(admin_tbl.rowCount()):
+                    count_item = admin_tbl.item(r, count_col)
+                    hours_item = admin_tbl.item(r, hours_col)
+                    count_val = _parse_financials_number(count_item.text()) if count_item else 0.0
+                    hours_val = _parse_financials_number(hours_item.text()) if hours_item else 0.0
+                    regular_hours_sum += (count_val * hours_val)
+
+            ot_hours_sum = 0.0
+            if count_col is not None and ot_hours_col is not None:
+                for r in range(admin_tbl.rowCount()):
+                    count_item = admin_tbl.item(r, count_col)
+                    ot_item = admin_tbl.item(r, ot_hours_col)
+                    count_val = _parse_financials_number(count_item.text()) if count_item else 0.0
+                    ot_val = _parse_financials_number(ot_item.text()) if ot_item else 0.0
+                    ot_hours_sum += (count_val * ot_val)
+
+            return material_total_sum, regular_hours_sum, ot_hours_sum
+
+        def _update_budget_section():
+            """Populate the Budget panel from live financials and schedule data."""
+            if not financials_budget_labels or financials_table is None or not financials_headers:
+                return
+
+            total_col = self._get_header_index(financials_headers, "Total")
+            rate_col = self._get_header_index(financials_headers, "Rate")
+            count_col_fin = self._get_header_index(financials_headers, "Count")
+            if total_col is None:
+                return
+
+            def _find_row(label: str) -> Optional[int]:
+                target = (label or "").strip().lower().rstrip(':')
+                for row in range(financials_table.rowCount()):
+                    desc_item = financials_table.item(row, 0)
+                    desc_text = desc_item.text().strip().lower().rstrip(':') if desc_item else ""
+                    if desc_text == target:
+                        return row
+                return None
+
+            def _cell_num(row_idx: Optional[int], col_idx: Optional[int]) -> float:
+                if row_idx is None or col_idx is None:
+                    return 0.0
+                cell = financials_table.item(row_idx, col_idx)
+                return _parse_financials_number(cell.text() if cell else "")
+
+            # ── Gather values from Financials table ──
+            supervision_row = _find_row("supervision")
+            labor_row = _find_row("labor")
+            misc_labor_row = _find_row("misc. labor")
+            dsc_row = _find_row("delivery/stocking/clean up")
+            material_sub_row = _find_row("material sub total")
+            misc_mat_row = _find_row("misc. material")
+            tax_row = _find_row("tax")
+            sub_hard_row = _find_row("sub hard cost total")
+            sub_ohp_row = _find_row("sub oh & p")
+
+            labor_rate = _cell_num(labor_row, rate_col) if rate_col is not None else 0.0
+            supervision_total = _cell_num(supervision_row, total_col)
+            dsc_total = _cell_num(dsc_row, total_col)
+            dsc_hours = _cell_num(dsc_row, count_col_fin) if count_col_fin is not None else 0.0
+            misc_labor_pct = _cell_num(misc_labor_row, rate_col) if rate_col is not None else 0.0
+            misc_mat_pct = _cell_num(misc_mat_row, rate_col) if rate_col is not None else 0.0
+            tax_rate = _cell_num(tax_row, rate_col) if rate_col is not None else 0.0
+            sub_hard_total = _cell_num(sub_hard_row, total_col)
+            sub_ohp_total = _cell_num(sub_ohp_row, total_col)
+            subcontracts = sub_hard_total + sub_ohp_total
+
+            # Reverse-engineer supervision hours from total / rate
+            supervision_hrs = (supervision_total / labor_rate) if labor_rate > 0 else 0.0
+
+            # ── Supervision ──
+            financials_budget_labels["supervision_hrs"].setText(f"{supervision_hrs:,.1f}")
+            financials_budget_labels["supervision_cost"].setText(f"${supervision_total:,.0f}")
+
+            # ── Delivery / Stocking / Cleanup ──
+            financials_budget_labels["dsc_hrs"].setText(f"{dsc_hours:,.1f}")
+            financials_budget_labels["dsc_cost"].setText(f"${dsc_total:,.0f}")
+
+            # ── Labor by category (with misc labor % added) ──
+            door_cost, frame_cost, hw_cost, door_labor, frame_labor, hw_labor = get_schedule_totals_by_category()
+            admin_mat_total, admin_reg_hours, admin_ot_hours = get_admin_misc_budget_totals()
+            total_labor_hrs = door_labor + frame_labor + hw_labor
+            misc_labor_mult = 1.0 + misc_labor_pct  # e.g. 1.10
+
+            labor_door_cost = door_labor * labor_rate * misc_labor_mult
+            labor_frame_cost = frame_labor * labor_rate * misc_labor_mult
+            labor_hw_cost = hw_labor * labor_rate * misc_labor_mult
+            labor_misc_cost = admin_reg_hours * labor_rate * misc_labor_mult
+            labor_budget_total = labor_door_cost + labor_frame_cost + labor_hw_cost + labor_misc_cost
+            total_labor_hrs_all = total_labor_hrs + admin_reg_hours
+
+            financials_budget_labels["labor_doors_hrs"].setText(f"{door_labor:,.1f} hrs | ${labor_door_cost:,.0f}")
+            financials_budget_labels["labor_frames_hrs"].setText(f"{frame_labor:,.1f} hrs | ${labor_frame_cost:,.0f}")
+            financials_budget_labels["labor_hardware_hrs"].setText(f"{hw_labor:,.1f} hrs | ${labor_hw_cost:,.0f}")
+            financials_budget_labels["labor_misc_hrs"].setText(f"{admin_reg_hours:,.1f} hrs | ${labor_misc_cost:,.0f}")
+            financials_budget_labels["labor_budget_total"].setText(f"{total_labor_hrs_all:,.1f} hrs | ${labor_budget_total:,.0f}")
+
+            # ── Material by category (with misc material % + tax factored in) ──
+            material_sub_total = _cell_num(material_sub_row, total_col)
+            # Build multiplier: (1 + misc %) then tax on that sum
+            mat_with_misc_mult = 1.0 + misc_mat_pct
+            tax_mult = 1.0 + tax_rate
+            mat_full_mult = mat_with_misc_mult * tax_mult
+
+            mat_door = door_cost * mat_full_mult
+            mat_frame = frame_cost * mat_full_mult
+            mat_hw = hw_cost * mat_full_mult
+            mat_misc = admin_mat_total * mat_full_mult
+            mat_budget_total = mat_door + mat_frame + mat_hw + mat_misc
+
+            financials_budget_labels["mat_doors"].setText(f"${mat_door:,.0f}")
+            financials_budget_labels["mat_frames"].setText(f"${mat_frame:,.0f}")
+            financials_budget_labels["mat_hardware"].setText(f"${mat_hw:,.0f}")
+            financials_budget_labels["mat_misc"].setText(f"${mat_misc:,.0f}")
+            financials_budget_labels["mat_budget_total"].setText(f"${mat_budget_total:,.0f}")
+
+            # ── Subcontracts ──
+            financials_budget_labels["subcontracts_total"].setText(f"${subcontracts:,.0f}")
 
         def calculate_ohp_rate_from_target_bid():
             if financials_table is None or not financials_headers:
@@ -16517,7 +16819,7 @@ class MainWindow(QMainWindow):
                     quoted_search_action = menu.addAction("Search Quoted Material Costs...")
                 menu.addSeparator()
                 copy_action = menu.addAction("Copy Row")
-                duplicate_action = menu.addAction("Duplicate Row") if is_schedule_table else None
+                duplicate_action = menu.addAction("Duplicate Row...") if is_schedule_table else None
                 delete_action = menu.addAction("Delete Row")
                 menu.addSeparator()
                 insert_action = None
@@ -16556,9 +16858,11 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(table.window(), "Copy Row", f"Row {row + 1} copied to clipboard")
 
                 elif duplicate_action and action == duplicate_action:
-                    # Duplicate row directly below the selected row
-                    if duplicate_rows_in_table(table, [row]):
-                        mark_schedule_changed()
+                    # Duplicate row(s) with optional suffix on the mark column
+                    self._duplicate_rows_with_dialog(
+                        table, row, table_headers,
+                        duplicate_rows_in_table, mark_schedule_changed,
+                    )
                 
                 elif action == delete_action:
                     # Delete row
@@ -16779,7 +17083,7 @@ class MainWindow(QMainWindow):
                         return total
 
                     return sum_cols(cost_cols), sum_cols(labor_cols)
-                
+
                 def get_admin_misc_totals():
                     """Get Material Total, Total Cost, Hours Total, Regular Hours Total, and OT Hours Total sums from Admin/Misc Cost table."""
                     admin_tbl = None
@@ -20618,15 +20922,49 @@ class MainWindow(QMainWindow):
             _detail_door_type_col = None
             _detail_frame_type_col = None
             _detail_hw_group_col = None
+            _detail_col_map: dict[str, int] = {}
             if schedule_headers:
                 for _di, _dh in enumerate(schedule_headers):
                     _dhl = _dh.strip().lower()
+                    _detail_col_map[_dhl] = _di + 1
                     if _dhl == "door type":
                         _detail_door_type_col = _di + 1
                     elif _dhl == "frame type":
                         _detail_frame_type_col = _di + 1
                     elif _dhl == "hardware group":
                         _detail_hw_group_col = _di + 1
+
+            def _get_row_cell_text(row: int, col_key: str) -> str:
+                """Return text from a schedule row by header name, or '' if not found."""
+                idx = _detail_col_map.get(col_key)
+                if idx is None:
+                    return ""
+                item = schedule_table.item(row, idx)
+                return item.text().strip() if item else ""
+
+            def _find_alternates_for_opening(opening_num: str) -> list[str]:
+                """Return list of Alternate names that include the given opening."""
+                results: list[str] = []
+                for widget, _csv_path, _headers, _q in tables_data:
+                    if isinstance(widget, AlternatesWidget) and not isinstance(widget, ChangeOrdersWidget):
+                        for alt_num, openings in widget.alternates_openings_data.items():
+                            for opening_tuple in openings:
+                                if opening_tuple and str(opening_tuple[0]).strip().lower() == opening_num.lower():
+                                    results.append(str(alt_num))
+                                    break
+                return results
+
+            def _find_change_orders_for_opening(opening_num: str) -> list[str]:
+                """Return list of Change Order names that include the given opening."""
+                results: list[str] = []
+                for widget, _csv_path, _headers, _q in tables_data:
+                    if isinstance(widget, ChangeOrdersWidget):
+                        for co_num, openings in widget.alternates_openings_data.items():
+                            for opening_tuple in openings:
+                                if opening_tuple and str(opening_tuple[0]).strip().lower() == opening_num.lower():
+                                    results.append(str(co_num))
+                                    break
+                return results
 
             def _on_schedule_selection_changed():
                 """Update detail panel based on currently selected cell."""
@@ -20635,13 +20973,14 @@ class MainWindow(QMainWindow):
                 if current is None:
                     return
                 col = current.column()
+                row = current.row()
                 cell_value = (current.text() or "").strip()
                 if not cell_value:
-                    detail_title_label.setText("Select a Door Type, Frame Type, or Hardware Group cell to see details")
+                    detail_title_label.setText("Select a cell to see details")
                     detail_content_label.setText("")
                     return
 
-                info_pairs = []
+                info_pairs: list[tuple[str, str]] = []
                 title_text = ""
 
                 if col == _detail_door_type_col and _detail_door_type_col is not None:
@@ -20694,45 +21033,81 @@ class MainWindow(QMainWindow):
 
                 elif col == _detail_hw_group_col and _detail_hw_group_col is not None:
                     title_text = f"Hardware Group: <b>{cell_value}</b>"
-                    # Look up parts from CombinedHardwareWidget
+                    # Use the widget's own method which properly resolves Part IDs
                     if combined_hardware_widget is not None:
-                        grp_headers = combined_hardware_widget.hardware_groups_headers
-                        grp_rows = combined_hardware_widget.hardware_groups_rows
-                        grp_col = None
-                        part_col = None
-                        count_col = None
-                        cost_col = None
-                        for hi, hv in enumerate(grp_headers):
-                            hvl = hv.strip().lower()
-                            if hvl == "hardware group":
-                                grp_col = hi
-                            elif hvl == "hardware part":
-                                part_col = hi
-                            elif hvl == "count":
-                                count_col = hi
-                            elif hvl == "cost":
-                                cost_col = hi
-                        if grp_col is not None and part_col is not None:
-                            parts_list = []
-                            for row in grp_rows:
-                                if len(row) > grp_col and row[grp_col].strip().lower() == cell_value.lower():
-                                    part_name = row[part_col].strip() if len(row) > part_col else ""
-                                    count_val = row[count_col].strip() if count_col is not None and len(row) > count_col else ""
-                                    cost_val = row[cost_col].strip() if cost_col is not None and len(row) > cost_col else ""
-                                    if part_name:
-                                        entry = part_name
-                                        extras = []
-                                        if count_val:
-                                            extras.append(f"Qty: {count_val}")
-                                        if cost_val:
-                                            extras.append(f"Cost: {cost_val}")
-                                        if extras:
-                                            entry += f" ({', '.join(extras)})"
-                                        parts_list.append(entry)
-                            if parts_list:
-                                info_pairs.append(("Parts", "; ".join(parts_list)))
+                        try:
+                            groups_data = combined_hardware_widget._build_hardware_groups_pdf_data()
+                            # Case-insensitive lookup
+                            matched_parts = None
+                            for gname, parts in groups_data.items():
+                                if gname.strip().lower() == cell_value.lower():
+                                    matched_parts = parts
+                                    break
+                            if matched_parts:
+                                for i, p in enumerate(matched_parts):
+                                    entry = p.get("part_name", "")
+                                    if not entry:
+                                        continue
+                                    extras = []
+                                    qty = p.get("qty", "")
+                                    if qty:
+                                        extras.append(f"x{qty}")
+                                    mfr = p.get("mfr", "")
+                                    if mfr:
+                                        extras.append(mfr)
+                                    finish = p.get("finish", "")
+                                    if finish:
+                                        extras.append(finish)
+                                    cat = p.get("category", "")
+                                    if cat:
+                                        extras.append(cat)
+                                    if extras:
+                                        entry += f" ({', '.join(extras)})"
+                                    info_pairs.append((f"Part {i+1}", entry))
+                        except Exception:
+                            pass
+
                 else:
-                    return  # Not a detail column
+                    # General opening details for any other column
+                    opening_num = _get_row_cell_text(row, "opening number")
+                    title_text = f"Opening: <b>{opening_num or '(row ' + str(row + 1) + ')'}</b>"
+
+                    # Comments & RFI
+                    comments = _get_row_cell_text(row, "comments")
+                    rfi = _get_row_cell_text(row, "rfi")
+                    if comments:
+                        info_pairs.append(("Comments", comments))
+                    if rfi:
+                        info_pairs.append(("RFI", rfi))
+
+                    # Alternates & Change Orders
+                    if opening_num:
+                        alt_list = _find_alternates_for_opening(opening_num)
+                        co_list = _find_change_orders_for_opening(opening_num)
+                        if alt_list:
+                            info_pairs.append(("Alternates", ", ".join(alt_list)))
+                        if co_list:
+                            info_pairs.append(("Change Orders", ", ".join(co_list)))
+
+                    # Cost & Labor
+                    for label, col_key in (
+                        ("Door Cost", "door cost"), ("Door Labor", "door labor"),
+                        ("Frame Cost", "frame cost"), ("Frame Labor", "frame labor"),
+                        ("HW Cost", "hardware cost"), ("HW Labor", "hardware labor"),
+                    ):
+                        val = _get_row_cell_text(row, col_key)
+                        if val:
+                            info_pairs.append((label, val))
+
+                    # Status fields
+                    for label, col_key in (
+                        ("Door Status", "door status"),
+                        ("Frame Status", "frame status"),
+                        ("HW Status", "hardware status"),
+                    ):
+                        val = _get_row_cell_text(row, col_key)
+                        if val:
+                            info_pairs.append((label, val))
 
                 if title_text:
                     detail_title_label.setText(title_text)
@@ -20747,7 +21122,7 @@ class MainWindow(QMainWindow):
                     detail_content_label.setText("&nbsp;&nbsp;|&nbsp;&nbsp;".join(spans))
                 elif title_text:
                     detail_content_label.setText(
-                        f"<span style='color:{dashboard_palette['muted_text']}'>No matching record found in type tables.</span>"
+                        f"<span style='color:{dashboard_palette['muted_text']}'>No details available.</span>"
                     )
 
             schedule_table.currentCellChanged.connect(lambda _r, _c, _pr, _pc: _on_schedule_selection_changed())
@@ -20814,9 +21189,213 @@ class MainWindow(QMainWindow):
                     return
                 self._delete_selected_schedule_rows(schedule_table, schedule_headers, mark_schedule_changed)
             
+            btn_duplicate_row = QPushButton("Duplicate Row")
+            btn_duplicate_row.setMaximumWidth(160)
+            btn_duplicate_row.setStyleSheet(
+                "QPushButton {"
+                f" background-color: {dashboard_palette['accent']};"
+                f" color: {dashboard_palette['select_text']};"
+                " font-weight: 600;"
+                " padding: 6px 12px;"
+                " border-radius: 4px;"
+                " border: 0px;"
+                "}"
+                f"QPushButton:hover {{ background-color: {_mix_hex(dashboard_palette['accent'], '#FFFFFF', 0.15)}; }}"
+                f"QPushButton:pressed {{ background-color: {_mix_hex(dashboard_palette['accent'], '#000000', 0.12)}; }}"
+            )
+
+            def on_duplicate_row_clicked():
+                row = schedule_table.currentRow()
+                if row < 0:
+                    QMessageBox.information(schedule_widget, "Duplicate Row", "Select a row first.")
+                    return
+                self._duplicate_rows_with_dialog(
+                    schedule_table, row, schedule_headers or [],
+                    None, mark_schedule_changed,
+                )
+
+            btn_duplicate_row.clicked.connect(on_duplicate_row_clicked)
             btn_send_to_alternate.clicked.connect(on_send_to_alternate_clicked)
             btn_delete_selected.clicked.connect(on_delete_selected_clicked)
+
+            # ── Status button ──
+            btn_status = QPushButton("Status")
+            btn_status.setMaximumWidth(160)
+            btn_status.setStyleSheet(
+                "QPushButton {"
+                f" background-color: {dashboard_palette['accent']};"
+                f" color: {dashboard_palette['select_text']};"
+                " font-weight: 600;"
+                " padding: 6px 12px;"
+                " border-radius: 4px;"
+                " border: 0px;"
+                "}"
+                f"QPushButton:hover {{ background-color: {_mix_hex(dashboard_palette['accent'], '#FFFFFF', 0.15)}; }}"
+                f"QPushButton:pressed {{ background-color: {_mix_hex(dashboard_palette['accent'], '#000000', 0.12)}; }}"
+            )
+
+            _STATUS_OPTIONS = ["Released", "Ordered", "Received", "Installed", "Rework", "Punchlist/Warranty"]
+
+            def _ensure_status_columns():
+                """Add Door Status / Frame Status / Hardware Status columns to the schedule
+                table if they do not already exist. Returns {header_lower: table_col_index}."""
+                nonlocal schedule_headers
+                status_headers = ["Door Status", "Frame Status", "Hardware Status"]
+                existing = {}
+                if schedule_headers:
+                    for idx, h in enumerate(schedule_headers):
+                        if h.strip().lower() in {sh.lower() for sh in status_headers}:
+                            existing[h.strip().lower()] = idx + 1  # +1 for checkbox col
+                missing = [sh for sh in status_headers if sh.lower() not in existing]
+                if missing and schedule_headers is not None:
+                    schedule_table.blockSignals(True)
+                    for sh in missing:
+                        new_col = schedule_table.columnCount()
+                        schedule_table.insertColumn(new_col)
+                        schedule_table.setHorizontalHeaderItem(new_col, QTableWidgetItem(sh))
+                        schedule_headers.append(sh)
+                        existing[sh.lower()] = new_col
+                        # Initialise every row
+                        for r in range(schedule_table.rowCount()):
+                            schedule_table.setItem(r, new_col, QTableWidgetItem(""))
+                        # Update _detail_col_map
+                        _detail_col_map[sh.lower()] = new_col
+                    schedule_table.blockSignals(False)
+                    mark_schedule_changed()
+                return existing
+
+            def _on_status_clicked():
+                """Handle Status button – prompt scope, categories, then status value."""
+                if not schedule_headers:
+                    QMessageBox.warning(schedule_widget, "Status", "Schedule headers are not available.")
+                    return
+
+                # Step 1 – Scope: Filtered View or Selected (checked) rows
+                scope_dlg = QDialog(schedule_widget)
+                scope_dlg.setWindowTitle("Update Status – Select Scope")
+                scope_dlg.setMinimumWidth(300)
+                scope_layout = QVBoxLayout(scope_dlg)
+                scope_layout.addWidget(QLabel("Apply status change to:"))
+                rb_filtered = QRadioButton("Filtered View (all visible rows)")
+                rb_selected = QRadioButton("Selected (checked rows only)")
+                rb_selected.setChecked(True)
+                scope_layout.addWidget(rb_filtered)
+                scope_layout.addWidget(rb_selected)
+                scope_btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                scope_btns.accepted.connect(scope_dlg.accept)
+                scope_btns.rejected.connect(scope_dlg.reject)
+                scope_layout.addWidget(scope_btns)
+                if scope_dlg.exec() != QDialog.DialogCode.Accepted:
+                    return
+                use_checked = rb_selected.isChecked()
+
+                # Determine target rows
+                target_rows: list[int] = []
+                for r in range(schedule_table.rowCount()):
+                    if schedule_table.isRowHidden(r):
+                        continue
+                    if use_checked:
+                        chk = schedule_table.item(r, 0)
+                        if chk is None or chk.checkState() != Qt.CheckState.Checked:
+                            continue
+                    target_rows.append(r)
+
+                if not target_rows:
+                    QMessageBox.information(schedule_widget, "Status", "No rows match the selected scope.")
+                    return
+
+                # Step 2 – Which items to change
+                cat_dlg = QDialog(schedule_widget)
+                cat_dlg.setWindowTitle("Update Status – Select Items")
+                cat_dlg.setMinimumWidth(300)
+                cat_layout = QVBoxLayout(cat_dlg)
+                cat_layout.addWidget(QLabel("Which items should receive a status update?"))
+                chk_doors = QCheckBox("Doors")
+                chk_frames = QCheckBox("Frames")
+                chk_hw = QCheckBox("Hardware")
+                chk_doors.setChecked(True)
+                chk_frames.setChecked(True)
+                chk_hw.setChecked(True)
+                cat_layout.addWidget(chk_doors)
+                cat_layout.addWidget(chk_frames)
+                cat_layout.addWidget(chk_hw)
+                cat_btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                cat_btns.accepted.connect(cat_dlg.accept)
+                cat_btns.rejected.connect(cat_dlg.reject)
+                cat_layout.addWidget(cat_btns)
+                if cat_dlg.exec() != QDialog.DialogCode.Accepted:
+                    return
+
+                selected_cats: list[tuple[str, str]] = []
+                if chk_doors.isChecked():
+                    selected_cats.append(("Doors", "door status"))
+                if chk_frames.isChecked():
+                    selected_cats.append(("Frames", "frame status"))
+                if chk_hw.isChecked():
+                    selected_cats.append(("Hardware", "hardware status"))
+                if not selected_cats:
+                    return
+
+                # Step 3 – Pick status value for each category
+                status_dlg = QDialog(schedule_widget)
+                status_dlg.setWindowTitle("Update Status – Choose Status")
+                status_dlg.setMinimumWidth(340)
+                status_layout = QVBoxLayout(status_dlg)
+                status_layout.addWidget(QLabel("Set the status for each selected item:"))
+
+                cat_combos: list[tuple[str, str, QComboBox]] = []
+                for cat_label, col_key in selected_cats:
+                    row_layout = QHBoxLayout()
+                    row_layout.addWidget(QLabel(f"{cat_label}:"))
+                    combo = QComboBox()
+                    combo.addItems(_STATUS_OPTIONS)
+                    row_layout.addWidget(combo)
+                    status_layout.addLayout(row_layout)
+                    cat_combos.append((cat_label, col_key, combo))
+
+                status_btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                status_btns.accepted.connect(status_dlg.accept)
+                status_btns.rejected.connect(status_dlg.reject)
+                status_layout.addWidget(status_btns)
+                if status_dlg.exec() != QDialog.DialogCode.Accepted:
+                    return
+
+                # Ensure columns exist
+                col_map = _ensure_status_columns()
+
+                # Apply statuses
+                schedule_table.blockSignals(True)
+                changed = False
+                for _cat_label, col_key, combo in cat_combos:
+                    table_col = col_map.get(col_key)
+                    if table_col is None:
+                        continue
+                    new_status = combo.currentText()
+                    for r in target_rows:
+                        item = schedule_table.item(r, table_col)
+                        if item is None:
+                            item = QTableWidgetItem("")
+                            schedule_table.setItem(r, table_col, item)
+                        if item.text().strip() != new_status:
+                            item.setText(new_status)
+                            changed = True
+                schedule_table.blockSignals(False)
+
+                if changed:
+                    mark_schedule_changed()
+
+                scope_label = "checked" if use_checked else "visible"
+                QMessageBox.information(
+                    schedule_widget,
+                    "Status Updated",
+                    f"Status updated for {len(target_rows)} {scope_label} row(s).",
+                )
+
+            btn_status.clicked.connect(_on_status_clicked)
+
             button_bar.addStretch()
+            button_bar.addWidget(btn_status)
+            button_bar.addWidget(btn_duplicate_row)
             button_bar.addWidget(btn_delete_selected)
             button_bar.addWidget(btn_send_to_alternate)
             schedule_layout.addWidget(action_panel)
@@ -20933,6 +21512,16 @@ class MainWindow(QMainWindow):
                     return card
 
                 def _make_secondary_kpi_panel() -> QWidget:
+                    outer = QWidget()
+                    outer_layout = QVBoxLayout(outer)
+                    outer_layout.setContentsMargins(0, 0, 0, 0)
+                    outer_layout.setSpacing(0)
+
+                    scroll = QScrollArea()
+                    scroll.setWidgetResizable(True)
+                    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                    scroll.setFrameShape(QFrame.Shape.NoFrame)
+
                     panel = QWidget()
                     panel_layout = QVBoxLayout(panel)
                     panel_layout.setContentsMargins(10, 8, 10, 8)
@@ -20942,7 +21531,7 @@ class MainWindow(QMainWindow):
                     title.setStyleSheet(f"color: {dashboard_palette['muted_text']}; font-size: 11px; font-weight: 600;")
                     panel_layout.addWidget(title)
 
-                    def _add_panel_metric(label_text: str, key: str):
+                    def _add_panel_metric(label_text: str, key: str, store: dict):
                         row_widget = QWidget()
                         row_layout = QHBoxLayout(row_widget)
                         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -20955,24 +21544,79 @@ class MainWindow(QMainWindow):
                         row_layout.addStretch()
                         row_layout.addWidget(value_label)
                         panel_layout.addWidget(row_widget)
-                        financials_secondary_kpi_labels[key] = value_label
+                        store[key] = value_label
 
-                    _add_panel_metric("Avg Sell / Opening", "avg_sell_opening")
-                    _add_panel_metric("OH&P $", "ohp_total")
-                    _add_panel_metric("OH&P % of Bid", "ohp_pct_bid")
-                    _add_panel_metric("Profit / Opening", "profit_per_opening")
-                    _add_panel_metric("Avg Cost / Opening", "avg_cost_opening")
-                    _add_panel_metric("Unquoted Scope", "unquoted_scope")
+                    _add_panel_metric("Avg Sell / Opening", "avg_sell_opening", financials_secondary_kpi_labels)
+                    _add_panel_metric("OH&P $", "ohp_total", financials_secondary_kpi_labels)
+                    _add_panel_metric("OH&P % of Bid", "ohp_pct_bid", financials_secondary_kpi_labels)
+                    _add_panel_metric("Profit / Opening", "profit_per_opening", financials_secondary_kpi_labels)
+                    _add_panel_metric("Avg Cost / Opening", "avg_cost_opening", financials_secondary_kpi_labels)
+                    _add_panel_metric("Unquoted Scope", "unquoted_scope", financials_secondary_kpi_labels)
+
+                    # ── Budget Section ─────────────────────────────────────
+                    sep = QFrame()
+                    sep.setFrameShape(QFrame.Shape.HLine)
+                    sep.setStyleSheet(f"color: {dashboard_palette['card_border']};")
+                    panel_layout.addWidget(sep)
+
+                    budget_title = QLabel("Budget")
+                    budget_title.setStyleSheet(f"color: {dashboard_palette['muted_text']}; font-size: 11px; font-weight: 600;")
+                    panel_layout.addWidget(budget_title)
+
+                    _add_panel_metric("Supervision Hrs", "supervision_hrs", financials_budget_labels)
+                    _add_panel_metric("Supervision $", "supervision_cost", financials_budget_labels)
+                    _add_panel_metric("Deliv/Stock/Clean Hrs", "dsc_hrs", financials_budget_labels)
+                    _add_panel_metric("Deliv/Stock/Clean $", "dsc_cost", financials_budget_labels)
+
+                    labor_sep = QFrame()
+                    labor_sep.setFrameShape(QFrame.Shape.HLine)
+                    labor_sep.setStyleSheet(f"color: {dashboard_palette['card_border']};")
+                    panel_layout.addWidget(labor_sep)
+
+                    labor_hdr = QLabel("Labor (incl. Misc %)")
+                    labor_hdr.setStyleSheet(f"color: {dashboard_palette['muted_text']}; font-size: 10px; font-style: italic;")
+                    panel_layout.addWidget(labor_hdr)
+
+                    _add_panel_metric("  Doors", "labor_doors_hrs", financials_budget_labels)
+                    _add_panel_metric("  Frames", "labor_frames_hrs", financials_budget_labels)
+                    _add_panel_metric("  Hardware", "labor_hardware_hrs", financials_budget_labels)
+                    _add_panel_metric("  Misc Cost", "labor_misc_hrs", financials_budget_labels)
+                    _add_panel_metric("  Labor Total", "labor_budget_total", financials_budget_labels)
+
+                    mat_sep = QFrame()
+                    mat_sep.setFrameShape(QFrame.Shape.HLine)
+                    mat_sep.setStyleSheet(f"color: {dashboard_palette['card_border']};")
+                    panel_layout.addWidget(mat_sep)
+
+                    mat_hdr = QLabel("Material (incl. Misc % + Tax)")
+                    mat_hdr.setStyleSheet(f"color: {dashboard_palette['muted_text']}; font-size: 10px; font-style: italic;")
+                    panel_layout.addWidget(mat_hdr)
+
+                    _add_panel_metric("  Doors", "mat_doors", financials_budget_labels)
+                    _add_panel_metric("  Frames", "mat_frames", financials_budget_labels)
+                    _add_panel_metric("  Hardware", "mat_hardware", financials_budget_labels)
+                    _add_panel_metric("  Misc Cost", "mat_misc", financials_budget_labels)
+                    _add_panel_metric("  Material Total", "mat_budget_total", financials_budget_labels)
+
+                    sub_sep = QFrame()
+                    sub_sep.setFrameShape(QFrame.Shape.HLine)
+                    sub_sep.setStyleSheet(f"color: {dashboard_palette['card_border']};")
+                    panel_layout.addWidget(sub_sep)
+
+                    _add_panel_metric("Subcontracts", "subcontracts_total", financials_budget_labels)
+
                     panel_layout.addStretch()
+                    scroll.setWidget(panel)
+                    outer_layout.addWidget(scroll)
 
-                    panel.setStyleSheet(
+                    outer.setStyleSheet(
                         f"background-color: {dashboard_palette['card_bg_alt']};"
                         f"border: 1px solid {dashboard_palette['card_border']};"
                         "border-radius: 6px;"
                     )
-                    panel.setMinimumWidth(260)
-                    panel.setMaximumWidth(300)
-                    return panel
+                    outer.setMinimumWidth(260)
+                    outer.setMaximumWidth(320)
+                    return outer
 
                 kpi_row.addWidget(_make_kpi_card("Material Total", "material_total"))
                 kpi_row.addWidget(_make_kpi_card("Labor Total", "labor_total"))
@@ -21184,7 +21828,7 @@ class MainWindow(QMainWindow):
                 body_splitter.setStretchFactor(0, 7)
                 body_splitter.setStretchFactor(1, 5)
                 body_splitter.setStretchFactor(2, 2)
-                QTimer.singleShot(0, lambda: body_splitter.setSizes([360, 860, 240]))
+                QTimer.singleShot(0, lambda: body_splitter.setSizes([360, 860, 260]))
                 financials_layout.addWidget(body_splitter)
 
                 financials_actions = QHBoxLayout()
