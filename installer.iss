@@ -47,6 +47,18 @@ Source: "data\Hinge_Specs.csv"; DestDir: "{app}\seed_data"; Flags: ignoreversion
 ; Include the official Tesseract installer so GORO setup can provision OCR automatically.
 Source: "tools\installers\{#TesseractInstallerName}"; DestDir: "{tmp}"; Flags: deleteafterinstall ignoreversion; Check: FileExists(ExpandConstant('{src}\tools\installers\{#TesseractInstallerName}'))
 
+[Dirs]
+; Ensure template and project directories exist even when empty.
+Name: "{app}\data\Template\1.Bid Docs"
+Name: "{app}\data\Template\2.Quotes"
+Name: "{app}\data\Template\3.Proposals"
+Name: "{app}\data\Template\4.Workbooks"
+Name: "{app}\data\WB_Template"
+Name: "{app}\data\awarded"
+Name: "{app}\data\bids"
+Name: "{app}\data\projects"
+Name: "{app}\data\submitted"
+
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "OropezaApps.GORO"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "OropezaApps.GORO"; Tasks: desktopicon

@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,16 @@ from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QMessageBox
 
 from core.constants import INFO_FILE
+
+# Expected subdirectories inside data/Template/
+_TEMPLATE_SUBDIRS = ("1.Bid Docs", "2.Quotes", "3.Proposals", "4.Workbooks")
+
+
+def _app_root() -> Path:
+    """Return the application root directory (works in both dev and frozen builds)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
 
 
 # ----------------------------
@@ -27,6 +38,17 @@ def ensure_dirs(root: Path) -> Tuple[Path, Path, Path, Path]:
     submitted.mkdir(parents=True, exist_ok=True)
     awarded.mkdir(parents=True, exist_ok=True)
     return bids, projects, submitted, awarded
+
+
+def ensure_template_dirs() -> None:
+    """Ensure the data/Template folder and its expected subdirectories exist.
+
+    This covers cases where PyInstaller or the installer failed to create
+    the empty directories, or when an older version is updated in place.
+    """
+    template_root = _app_root() / "data" / "Template"
+    for name in _TEMPLATE_SUBDIRS:
+        (template_root / name).mkdir(parents=True, exist_ok=True)
 
 
 def list_projects(projects_root: Path) -> List[Path]:
@@ -177,5 +199,6 @@ def resolve_data_root(settings: QSettings) -> Path:
 def get_paths(settings: QSettings) -> Paths:
     root = resolve_data_root(settings)
     bids, projects, submitted, awarded = ensure_dirs(root)
+    ensure_template_dirs()
     return Paths(root, bids, projects, submitted, awarded)
 
