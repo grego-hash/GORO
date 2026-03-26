@@ -15356,9 +15356,14 @@ class MainWindow(QMainWindow):
                 desc = row[0].strip() if row else ""
                 desc_key = desc.lower()
                 # Map legacy row names to current template names
+                original_key = desc_key
                 desc_key = legacy_aliases.get(desc_key, desc_key)
                 if desc_key in default_descs and desc_key not in existing_by_desc:
                     existing_by_desc[desc_key] = row
+                elif original_key in legacy_aliases:
+                    # Drop duplicate legacy rows (e.g. "Deliveries:" when
+                    # "Delivery/Stocking/Clean Up:" already exists).
+                    continue
                 else:
                     other_rows.append(row)
 
@@ -20954,9 +20959,10 @@ class MainWindow(QMainWindow):
 
                 # Get Bid Total
                 bid_total = _get_live_financials_bid_total()
+                allowances_total = _get_live_allowances_total()
 
-                # Calculate pool
-                admin_sell_pool = bid_total - schedule_total_sum
+                # Calculate pool (subtract allowances so they aren't absorbed into admin sell)
+                admin_sell_pool = bid_total - schedule_total_sum - allowances_total
 
                 # Get labor rate
                 labor_rate = _get_live_financials_labor_rate()
@@ -33506,12 +33512,17 @@ class MainWindow(QMainWindow):
             c.line(value_x, y - 2, x + width, y - 2)
             return y - 16
 
-        def draw_wrapped(c, x, y, text, max_width, leading=12, font="Helvetica", size=9):
+        def draw_wrapped(c, x, y, text, max_width, leading=12, font="Helvetica", size=9, section_title=None):
             c.setFont(font, size)
             if not text:
                 return y - leading
             lines = simpleSplit(text, font, size, max_width)
             for line in lines:
+                if y < margin + leading:
+                    new_page()
+                    if section_title:
+                        y = draw_section_bar(c, y, section_title + " (cont.)")
+                    c.setFont(font, size)
                 c.drawString(x, y, line)
                 y -= leading
             return y
@@ -33613,18 +33624,18 @@ class MainWindow(QMainWindow):
                             c.setFont("Helvetica-Bold", 9)
                         else:
                             c.setFont("Helvetica-Bold", 9)
+                        if y < margin + 20:
+                            new_page()
+                            y = draw_section_bar(c, y, section_title + " (cont.)")
+                            c.setFont("Helvetica-Bold" if is_bold else "Helvetica-Bold", 9)
                         c.drawString(left_x, y, label)
-                        y = draw_wrapped(c, left_x + 70 if label else left_x, y, text, content_width - (70 if label else 0))
+                        y = draw_wrapped(c, left_x + 70 if label else left_x, y, text, content_width - (70 if label else 0), section_title=section_title)
                     else:
                         if is_bold:
-                            y = draw_wrapped(c, left_x, y, text, content_width, font="Helvetica-Bold", size=9)
+                            y = draw_wrapped(c, left_x, y, text, content_width, font="Helvetica-Bold", size=9, section_title=section_title)
                         else:
-                            y = draw_wrapped(c, left_x, y, text, content_width)
+                            y = draw_wrapped(c, left_x, y, text, content_width, section_title=section_title)
                     y -= 4
-                    # Check if we need a new page during content drawing
-                    if y < margin + 80:
-                        new_page()
-                        y = draw_section_bar(c, y, section_title)
         
         closing_text = "Please feel free to contact me with any questions or requests. We appreciate being given the opportunity to continue to work with you on this project."
         closing_lines = simpleSplit(closing_text, "Helvetica", 9, content_width)
