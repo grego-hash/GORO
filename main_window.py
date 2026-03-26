@@ -123,6 +123,8 @@ APP_ROOT = Path(__file__).resolve().parent
 
 
 class MainWindow(QMainWindow):
+    _project_change_order_total_label: Optional[QLabel]
+
     def __init__(self, home_callback=None, defer_initial_refresh: bool = False):
         super().__init__()
         self.setWindowTitle(APP_DISPLAY_NAME)
@@ -224,6 +226,7 @@ class MainWindow(QMainWindow):
         self.customers_info = self._load_customers()
         self.customers_contacts = self._load_customer_contacts()
         self.customers_contact_details = self._load_customer_contact_details()
+        self.customers_contact_records = self._load_customer_contact_records()
         
         # Tasks + calendar state
         self.tasks_file = self._get_tasks_file_path()
@@ -243,6 +246,11 @@ class MainWindow(QMainWindow):
         self._has_unsaved_changes: bool = False
         self._selection_change_in_progress: bool = False
         self._current_editing_path: Optional[Path] = None
+        self._job_number_locked: bool = False
+        self._job_number_override_used: bool = False
+        self._gc_locked: bool = False
+        self._gc_override_used: bool = False
+        self._locked_gc_value: str = ""
         
         # Track open schedule dialogs (so they don't get garbage collected)
         self._open_schedule_dialogs: List[QDialog] = []
@@ -359,6 +367,136 @@ class MainWindow(QMainWindow):
         """Mark that there are unsaved changes in the details section."""
         self._has_unsaved_changes = True
 
+    def _apply_job_number_lock_state(self, locked: bool) -> None:
+        self._job_number_locked = bool(locked)
+        if not hasattr(self, "edit_job_number"):
+            return
+        self.edit_job_number.setReadOnly(self._job_number_locked)
+        if self._job_number_locked:
+            self.edit_job_number.setToolTip("Locked after first entry. Right-click to override.")
+        else:
+            self.edit_job_number.setToolTip("Right-click to lock or override.")
+
+    def _override_job_number_lock(self) -> None:
+        if not hasattr(self, "edit_job_number"):
+            return
+        reply = QMessageBox.question(
+            self,
+            "Override Job Number Lock",
+            "Allow editing this locked Job Number?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._job_number_override_used = True
+        self._apply_job_number_lock_state(False)
+        self.edit_job_number.setFocus()
+        self.edit_job_number.selectAll()
+
+    def _show_job_number_context_menu(self, pos) -> None:
+        if not hasattr(self, "edit_job_number"):
+            return
+        menu = self.edit_job_number.createStandardContextMenu()
+        menu.addSeparator()
+
+        has_value = bool(self.edit_job_number.text().strip())
+        if self._job_number_locked and has_value:
+            action = QAction("Override Lock (Edit Job Number)", menu)
+            action.triggered.connect(self._override_job_number_lock)
+            menu.addAction(action)
+        elif has_value:
+            action = QAction("Lock Job Number", menu)
+            action.triggered.connect(lambda: self._apply_job_number_lock_state(True))
+            menu.addAction(action)
+
+        menu.exec(self.edit_job_number.mapToGlobal(pos))
+
+    def _apply_gc_lock_state(self, locked: bool) -> None:
+        self._gc_locked = bool(locked)
+        if not hasattr(self, "gc_combo"):
+            return
+
+        current_gc = self.gc_combo.currentText().strip()
+        if self._gc_locked and current_gc:
+            self._locked_gc_value = current_gc
+        elif not self._gc_locked:
+            self._locked_gc_value = ""
+
+        tip = (
+            "Locked after first selection. Right-click to override."
+            if self._gc_locked
+            else "Right-click to lock or override."
+        )
+        self.gc_combo.setToolTip(tip)
+        line_edit = self.gc_combo.lineEdit()
+        if line_edit is not None:
+            line_edit.setReadOnly(self._gc_locked)
+            line_edit.setToolTip(tip)
+
+    def _override_gc_lock(self) -> None:
+        if not hasattr(self, "gc_combo"):
+            return
+        reply = QMessageBox.question(
+            self,
+            "Override GC Lock",
+            "Allow editing this locked GC?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._gc_override_used = True
+        self._apply_gc_lock_state(False)
+        line_edit = self.gc_combo.lineEdit()
+        if line_edit is not None:
+            line_edit.setFocus()
+            line_edit.selectAll()
+
+    def _show_gc_context_menu(self, pos, from_line_edit: bool = False) -> None:
+        if not hasattr(self, "gc_combo"):
+            return
+
+        anchor = self.gc_combo.lineEdit() if from_line_edit else self.gc_combo
+        if anchor is None:
+            anchor = self.gc_combo
+
+        menu = QMenu(self)
+        selected_gc = self.gc_combo.currentText().strip()
+
+        if self._gc_locked and selected_gc:
+            override_action = QAction("Override Lock (Edit GC)", menu)
+            override_action.triggered.connect(self._override_gc_lock)
+            menu.addAction(override_action)
+        elif selected_gc:
+            lock_action = QAction("Lock GC", menu)
+            lock_action.triggered.connect(lambda: self._apply_gc_lock_state(True))
+            menu.addAction(lock_action)
+
+        if selected_gc:
+            menu.addSeparator()
+            open_customer_action = QAction("Open Customer Record", menu)
+            open_customer_action.triggered.connect(lambda: self._open_customers_for_gc(0))
+            menu.addAction(open_customer_action)
+
+        menu.exec(anchor.mapToGlobal(pos))
+
+    def _on_primary_gc_changed(self, _text: str) -> None:
+        if not hasattr(self, "gc_combo"):
+            return
+        if self._gc_locked:
+            current_gc = self.gc_combo.currentText().strip()
+            locked_gc = str(self._locked_gc_value or "").strip()
+            if locked_gc and current_gc != locked_gc:
+                self.gc_combo.blockSignals(True)
+                self.gc_combo.setCurrentText(locked_gc)
+                self.gc_combo.blockSignals(False)
+                self.statusBar().showMessage("GC is locked. Right-click GC to override.", 3000)
+                return
+
+        self._mark_unsaved_changes()
+        self._on_gc_selected()
+
     def _on_gc_selected(self):
         """Update Point Of Contact dropdown when GC is selected."""
         self._on_gc_combo_selected(0)
@@ -382,7 +520,24 @@ class MainWindow(QMainWindow):
         if current_poc:
             poc_combo.setEditText(current_poc)
         self._update_gc_contact_details(idx)
+        self._refresh_additional_poc_options(idx)
         self._sync_gc_tabs()
+
+    def _open_customers_for_gc(self, idx: int = 0) -> None:
+        gc_combos = getattr(self, "gc_combos", [self.gc_combo])
+        selected_gc = ""
+        if 0 <= idx < len(gc_combos):
+            selected_gc = gc_combos[idx].currentText().strip()
+
+        dialog = CustomerManagementDialog(
+            self,
+            data_path=self.paths.root,
+            initial_customer=selected_gc,
+            customer_widget_cls=CustomerWidget,
+        )
+        dialog.exec()
+        self._refresh_customer_dropdowns()
+        self._sync_gc_tabs(selected_idx=idx)
 
     def _update_gc_contact_details(self, idx: int):
         gc_combos = getattr(self, "gc_combos", [self.gc_combo])
@@ -408,6 +563,142 @@ class MainWindow(QMainWindow):
 
         email_edits[idx].setText(email)
         phone_edits[idx].setText(phone)
+        primary_labels = getattr(self, "primary_poc_info_labels", [])
+        if idx < len(primary_labels):
+            self._update_additional_poc_summary(idx, poc_combos[idx], primary_labels[idx])
+
+    def _contact_record_for(self, gc_name: str, poc_name: str) -> Dict[str, str]:
+        if not gc_name or not poc_name:
+            return {}
+        for row in self.customers_contact_records.get(gc_name, []):
+            if str(row.get("name", "") or "").strip().lower() == poc_name.strip().lower():
+                return row
+        return {}
+
+    def _update_additional_poc_summary(self, idx: int, combo: QComboBox, summary_label: QLabel) -> None:
+        gc_combos = getattr(self, "gc_combos", [])
+        if idx < 0 or idx >= len(gc_combos):
+            summary_label.setText("-")
+            return
+        gc_name = gc_combos[idx].currentText().strip()
+        poc_name = combo.currentText().strip()
+        record = self._contact_record_for(gc_name, poc_name)
+        if not record:
+            summary_label.setText("-")
+            return
+
+        position = str(record.get("position", "") or "").strip() or "(No title)"
+        email = str(record.get("email", "") or "").strip() or "-"
+        phone = str(record.get("phone", "") or "").strip() or "-"
+        summary_label.setText(f"{position}\n{email} | {phone}")
+
+    def _refresh_additional_poc_options(self, idx: int) -> None:
+        gc_combos = getattr(self, "gc_combos", [])
+        combos_by_gc = getattr(self, "additional_poc_combos", [])
+        labels_by_gc = getattr(self, "additional_poc_info_labels", [])
+        if idx < 0 or idx >= len(gc_combos) or idx >= len(combos_by_gc):
+            return
+
+        gc_name = gc_combos[idx].currentText().strip()
+        options = self.customers_contacts.get(gc_name, []) if gc_name else []
+        combos = combos_by_gc[idx]
+        labels = labels_by_gc[idx] if idx < len(labels_by_gc) else []
+        for row_idx, combo in enumerate(combos):
+            current = combo.currentText().strip()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("")
+            if options:
+                combo.addItems(options)
+            combo.setCurrentText(current)
+            combo.blockSignals(False)
+            if row_idx < len(labels):
+                self._update_additional_poc_summary(idx, combo, labels[row_idx])
+
+    def _clear_additional_poc_selectors(self, idx: int) -> None:
+        layouts = getattr(self, "additional_poc_layouts", [])
+        combos_by_gc = getattr(self, "additional_poc_combos", [])
+        labels_by_gc = getattr(self, "additional_poc_info_labels", [])
+        if idx < 0 or idx >= len(layouts):
+            return
+        layout = layouts[idx]
+        while layout.count():
+            item = layout.takeAt(0)
+            row_widget = item.widget()
+            if row_widget is not None:
+                row_widget.deleteLater()
+        if idx < len(combos_by_gc):
+            combos_by_gc[idx].clear()
+        if idx < len(labels_by_gc):
+            labels_by_gc[idx].clear()
+
+    def _add_additional_poc_selector(self, idx: int, selected_name: str = "", mark_unsaved: bool = True) -> None:
+        gc_combos = getattr(self, "gc_combos", [])
+        layouts = getattr(self, "additional_poc_layouts", [])
+        combos_by_gc = getattr(self, "additional_poc_combos", [])
+        labels_by_gc = getattr(self, "additional_poc_info_labels", [])
+        if idx < 0 or idx >= len(gc_combos) or idx >= len(layouts) or idx >= len(combos_by_gc) or idx >= len(labels_by_gc):
+            return
+
+        gc_name = gc_combos[idx].currentText().strip()
+        if not gc_name:
+            QMessageBox.information(self, "Add POC", "Select a GC first.")
+            return
+
+        row_widget = QWidget()
+        row_layout = QVBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(3)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(6)
+
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setMinimumWidth(180)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        combo.addItem("")
+        for name in self.customers_contacts.get(gc_name, []):
+            combo.addItem(name)
+        if selected_name:
+            combo.setCurrentText(selected_name)
+
+        info_label = QLabel("-")
+        info_label.setWordWrap(True)
+        info_label.setMinimumHeight(38)
+        info_label.setStyleSheet(f"color: {self.theme_colors.get('text_secondary', '#AFAFAF')}; font-size: 11px;")
+
+        remove_btn = QPushButton("✕")
+        remove_btn.setMaximumWidth(28)
+        remove_btn.setToolTip("Remove this additional POC")
+
+        top_row.addWidget(combo, 1)
+        top_row.addWidget(remove_btn)
+        row_layout.addLayout(top_row)
+        row_layout.addWidget(info_label)
+
+        combos_by_gc[idx].append(combo)
+        labels_by_gc[idx].append(info_label)
+        layouts[idx].addWidget(row_widget)
+
+        combo.currentTextChanged.connect(self._mark_unsaved_changes)
+        combo.currentTextChanged.connect(lambda _text, i=idx, c=combo, l=info_label: self._update_additional_poc_summary(i, c, l))
+
+        def _remove_row() -> None:
+            if combo in combos_by_gc[idx]:
+                remove_index = combos_by_gc[idx].index(combo)
+                combos_by_gc[idx].pop(remove_index)
+                if remove_index < len(labels_by_gc[idx]):
+                    labels_by_gc[idx].pop(remove_index)
+            row_widget.deleteLater()
+            self._mark_unsaved_changes()
+
+        remove_btn.clicked.connect(_remove_row)
+        self._update_additional_poc_summary(idx, combo, info_label)
+
+        if mark_unsaved:
+            self._mark_unsaved_changes()
 
     def _browse_invite_doc(self, idx: int):
         edits = getattr(self, "invite_doc_edits", [])
@@ -1880,7 +2171,15 @@ class MainWindow(QMainWindow):
 
         return widget
 
-    def _make_bid_card_widget(self, total_text: str, display_name: str, due_date: Optional[str], proposal_type: str = "", gc: str = "") -> QWidget:
+    def _make_bid_card_widget(
+        self,
+        total_text: str,
+        display_name: str,
+        due_date: Optional[str],
+        proposal_type: str = "",
+        gc: str = "",
+        secondary_text: Optional[str] = None,
+    ) -> QWidget:
         """Create a bid card widget showing name/due date vertically with total on right."""
         widget = QWidget()
         layout = QHBoxLayout(widget)
@@ -1934,11 +2233,13 @@ class MainWindow(QMainWindow):
         name_label.setStyleSheet(f"color: {c.get('text_primary', '#cccccc')};")
         total_label.setStyleSheet(f"color: {c.get('text_muted', '#888888')};")
 
+        effective_secondary = str(secondary_text).strip() if secondary_text is not None else ""
         if due_date and due_date.strip():
             due_row = QHBoxLayout()
             due_row.setContentsMargins(0, 0, 0, 0)
             due_row.setSpacing(8)
-            due_label = QLabel(f"Due: {due_date}")
+            due_text = effective_secondary if effective_secondary else f"Due: {due_date}"
+            due_label = QLabel(due_text)
             due_label.setObjectName("bid_card_due_label")
             due_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             due_label.setMinimumHeight(20)
@@ -4253,7 +4554,22 @@ class MainWindow(QMainWindow):
         scroll_layout.setSpacing(8)
 
         self.details_title = QLabel("<b>Details</b>")
-        scroll_layout.addWidget(self.details_title)
+        details_header_row = QHBoxLayout()
+        details_header_row.setContentsMargins(0, 0, 0, 0)
+        details_header_row.setSpacing(8)
+        details_header_row.addWidget(self.details_title)
+        details_header_row.addStretch(1)
+        self.btn_prev_project = QPushButton("←")
+        self.btn_prev_project.setToolTip("Previous Project")
+        self.btn_prev_project.setFixedWidth(28)
+        self.btn_prev_project.clicked.connect(lambda: self._navigate_project_selection(-1))
+        self.btn_next_project = QPushButton("→")
+        self.btn_next_project.setToolTip("Next Project")
+        self.btn_next_project.setFixedWidth(28)
+        self.btn_next_project.clicked.connect(lambda: self._navigate_project_selection(1))
+        details_header_row.addWidget(self.btn_prev_project)
+        details_header_row.addWidget(self.btn_next_project)
+        scroll_layout.addLayout(details_header_row)
 
         self.lbl_name = QLabel("-")
         self.lbl_name.setWordWrap(True)
@@ -4267,6 +4583,11 @@ class MainWindow(QMainWindow):
         self.lbl_status = QComboBox()
         self.lbl_status.setEditable(True)
         self.lbl_status.addItems(BID_STATUSES)
+        self.edit_job_number = QLineEdit()
+        self.edit_job_number.setPlaceholderText("Job #")
+        self.edit_job_number.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.edit_job_number.customContextMenuRequested.connect(self._show_job_number_context_menu)
+        self._apply_job_number_lock_state(False)
         self.lbl_due = QDateEdit()
         self.lbl_due.setCalendarPopup(True)
         self.lbl_due.setDisplayFormat("yyyy-MM-dd")
@@ -4282,14 +4603,21 @@ class MainWindow(QMainWindow):
         self.lbl_gc = QLabel("-")
         self.lbl_gc.setWordWrap(True)
         self.lbl_gc.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.lbl_estimator = QComboBox()
-        self.lbl_estimator.setEditable(False)
+        self.lbl_estimator = QLineEdit()
+        self.lbl_estimator.setReadOnly(False)
         self.lbl_project_manager = QComboBox()
         self.lbl_project_manager.setEditable(False)
         self.gc_combo = QComboBox()
         self.gc_combo.setEditable(True)
         self.gc_combo.addItems(self.customers_info)
         self.gc_combo.setMinimumWidth(180)
+        self.gc_combo.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.gc_combo.customContextMenuRequested.connect(self._show_gc_context_menu)
+        gc_line_edit = self.gc_combo.lineEdit()
+        if gc_line_edit is not None:
+            gc_line_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            gc_line_edit.customContextMenuRequested.connect(lambda pos: self._show_gc_context_menu(pos, True))
+        self._apply_gc_lock_state(False)
         self.gc_combo_2 = QComboBox()
         self.gc_combo_2.setEditable(True)
         self.gc_combo_2.addItems(self.customers_info)
@@ -4386,11 +4714,11 @@ class MainWindow(QMainWindow):
         
         # Connect change signals to track unsaved changes
         self.lbl_status.currentTextChanged.connect(self._mark_unsaved_changes)
+        self.edit_job_number.textChanged.connect(self._mark_unsaved_changes)
         self.lbl_due.dateChanged.connect(self._mark_unsaved_changes)
-        self.lbl_estimator.currentTextChanged.connect(self._mark_unsaved_changes)
+        self.lbl_estimator.textChanged.connect(self._mark_unsaved_changes)
         self.lbl_project_manager.currentTextChanged.connect(self._mark_unsaved_changes)
-        self.gc_combo.currentTextChanged.connect(self._mark_unsaved_changes)
-        self.gc_combo.currentTextChanged.connect(self._on_gc_selected)
+        self.gc_combo.currentTextChanged.connect(self._on_primary_gc_changed)
         for idx, _gc in enumerate(self.gc_combos):
             if idx > 0:
                 _gc.currentTextChanged.connect(self._mark_unsaved_changes)
@@ -4432,6 +4760,7 @@ class MainWindow(QMainWindow):
             return card, value_label, sub_label
 
         status_card, self._kpi_status_label, _status_sub = _kpi_card("Status")
+        self._kpi_job_card, self._kpi_job_number_label, _job_sub = _kpi_card("Job #")
         self._kpi_days_card, self._kpi_days_label, self._kpi_days_sub_label = _kpi_card("Days Until Due")
         self._kpi_type_card, self._kpi_type_label, _type_sub = _kpi_card("Proposal Type")
         tasks_card, self._kpi_tasks_label, _tasks_sub = _kpi_card("Open Tasks")
@@ -4495,6 +4824,7 @@ class MainWindow(QMainWindow):
         openings_inner.addWidget(openings_sub)
 
         kpi_strip_layout.addWidget(status_card, 1)
+        kpi_strip_layout.addWidget(self._kpi_job_card, 1)
         kpi_strip_layout.addWidget(total_card, 2)
         kpi_strip_layout.addWidget(self._kpi_days_card, 1)
         kpi_strip_layout.addWidget(openings_card, 1)
@@ -4503,6 +4833,7 @@ class MainWindow(QMainWindow):
         scroll_layout.addWidget(kpi_strip)
 
         self.lbl_status.currentTextChanged.connect(lambda _text: self._update_kpi_strip())
+        self.edit_job_number.textChanged.connect(lambda _text: self._update_kpi_strip())
         self.lbl_due.dateChanged.connect(lambda _date: self._update_kpi_strip())
         self.lbl_proposal_type.currentTextChanged.connect(lambda _text: self._update_kpi_strip())
 
@@ -4520,7 +4851,13 @@ class MainWindow(QMainWindow):
         left_meta_form.addRow("<b>Name:</b>", self.lbl_name)
         left_meta_form.addRow("<b>Modified:</b>", self.lbl_modified)
         left_meta_form.addRow("<b>Type:</b>", self.lbl_type)
-        left_meta_form.addRow("<b>Status:</b>", self.lbl_status)
+        status_row_widget = QWidget()
+        status_row_layout = QHBoxLayout(status_row_widget)
+        status_row_layout.setContentsMargins(0, 0, 0, 0)
+        status_row_layout.setSpacing(8)
+        status_row_layout.addWidget(self.lbl_status, 1)
+        left_meta_form.addRow("<b>Status:</b>", status_row_widget)
+        left_meta_form.addRow("<b>Job #:</b>", self.edit_job_number)
         self.lbl_due_label = QLabel("<b>Due date:</b>")
         left_meta_form.addRow(self.lbl_due_label, self.lbl_due)
         left_meta_form.addRow("<b>Estimator:</b>", self.lbl_estimator)
@@ -4556,18 +4893,67 @@ class MainWindow(QMainWindow):
         self.gc_tab_widget = QTabWidget()
         self.gc_tab_widget.setObjectName("gcContactTabs")
         self.gc_tab_widget.setDocumentMode(True)
-        self.gc_tab_widget.setMaximumHeight(220)
+        self.gc_tab_widget.setMinimumHeight(220)
+        self.gc_tab_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.add_poc_buttons: List[QPushButton] = []
+        self.open_gc_customer_buttons: List[QPushButton] = []
+        self.primary_poc_info_labels: List[QLabel] = []
+        self.additional_poc_containers: List[QWidget] = []
+        self.additional_poc_layouts: List[QVBoxLayout] = []
+        self.additional_poc_combos: List[List[QComboBox]] = []
+        self.additional_poc_info_labels: List[List[QLabel]] = []
+        self.invite_doc_row_labels: List[QLabel] = []
         for idx in range(5):
             gc_tab = QWidget()
             gc_tab_form = QFormLayout(gc_tab)
             gc_tab_form.setContentsMargins(8, 8, 8, 8)
             gc_tab_form.setSpacing(6)
             gc_tab_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-            gc_tab_form.addRow("GC:", self.gc_combos[idx])
-            gc_tab_form.addRow("POC:", self.poc_combos[idx])
-            gc_tab_form.addRow("Email:", self.poc_email_edits[idx])
-            gc_tab_form.addRow("Phone:", self.poc_phone_edits[idx])
-            gc_tab_form.addRow("Invite Doc:", self.invite_doc_widgets[idx])
+            gc_row = QWidget()
+            gc_row_layout = QHBoxLayout(gc_row)
+            gc_row_layout.setContentsMargins(0, 0, 0, 0)
+            gc_row_layout.setSpacing(4)
+            gc_row_layout.addWidget(self.gc_combos[idx], 1)
+
+            open_gc_customer_btn = QPushButton("Customers...")
+            open_gc_customer_btn.setToolTip("Open Customers for this GC")
+            open_gc_customer_btn.setMaximumWidth(96)
+            open_gc_customer_btn.clicked.connect(lambda _checked=False, i=idx: self._open_customers_for_gc(i))
+            self.open_gc_customer_buttons.append(open_gc_customer_btn)
+            gc_row_layout.addWidget(open_gc_customer_btn)
+
+            gc_tab_form.addRow("GC:", gc_row)
+
+            primary_poc_row = QWidget()
+            primary_poc_layout = QVBoxLayout(primary_poc_row)
+            primary_poc_layout.setContentsMargins(0, 0, 0, 0)
+            primary_poc_layout.setSpacing(3)
+            primary_poc_layout.addWidget(self.poc_combos[idx])
+            primary_poc_info = QLabel("-")
+            primary_poc_info.setWordWrap(True)
+            primary_poc_info.setMinimumHeight(38)
+            primary_poc_info.setStyleSheet(f"color: {self.theme_colors.get('text_secondary', '#AFAFAF')}; font-size: 11px;")
+            self.primary_poc_info_labels.append(primary_poc_info)
+            primary_poc_layout.addWidget(primary_poc_info)
+            gc_tab_form.addRow("POC:", primary_poc_row)
+
+            add_poc_btn = QPushButton("Add POC…")
+            add_poc_btn.clicked.connect(lambda _checked=False, i=idx: self._add_additional_poc_selector(i))
+            self.add_poc_buttons.append(add_poc_btn)
+            gc_tab_form.addRow("", add_poc_btn)
+
+            additional_container = QWidget()
+            additional_layout = QVBoxLayout(additional_container)
+            additional_layout.setContentsMargins(0, 0, 0, 0)
+            additional_layout.setSpacing(4)
+            self.additional_poc_containers.append(additional_container)
+            self.additional_poc_layouts.append(additional_layout)
+            self.additional_poc_combos.append([])
+            self.additional_poc_info_labels.append([])
+            gc_tab_form.addRow("Additional POCs:", additional_container)
+            invite_label = QLabel("Invite Doc:")
+            self.invite_doc_row_labels.append(invite_label)
+            gc_tab_form.addRow(invite_label, self.invite_doc_widgets[idx])
             self._gc_tab_pages.append(gc_tab)
 
         self._sync_gc_tabs()
@@ -4806,7 +5192,7 @@ class MainWindow(QMainWindow):
         self.project_details_views = QTabWidget()
         self.project_details_views.setObjectName("projectDetailsViews")
         self.project_details_views.setDocumentMode(True)
-        self._project_detail_tab_keys = ["main", "financials", "purchase_orders", "work_orders", "scheduling"]
+        self._project_detail_tab_keys = ["main", "financials", "change_orders", "purchase_orders", "work_orders", "scheduling"]
         self._project_view_tables: Dict[str, QTableWidget] = {}
         self._project_view_table_paths: Dict[str, Optional[Path]] = {}
         self._project_view_dirty: Dict[str, bool] = {}
@@ -4814,16 +5200,19 @@ class MainWindow(QMainWindow):
         self._project_change_order_path: Optional[Path] = None
         self._project_co_markup_label: Optional[QLabel] = None
         self._project_co_markup_button: Optional[QPushButton] = None
+        self._project_change_order_total_label: Optional[QLabel] = None
+        self._project_co_widget: Optional[ChangeOrdersWidget] = None
+        self._project_co_widget_container: Optional[QVBoxLayout] = None
+        self._project_co_widget_workbook: Optional[Path] = None
         self._project_detail_prev_tab_index: int = 0
         self.project_details_views.addTab(main_details_tab, "Main")
         self.project_details_views.addTab(
-            self._build_project_detail_utility_tab(
-                "financials",
-                "Financials",
-                "Review and open the active workbook financials file for this project.",
-                "Open Financials",
-            ),
+            self._build_project_financials_dashboard(),
             "Financials",
+        )
+        self.project_details_views.addTab(
+            self._build_project_change_orders_tab(),
+            "Change Orders",
         )
         self.project_details_views.addTab(
             self._build_project_detail_utility_tab(
@@ -5833,6 +6222,90 @@ class MainWindow(QMainWindow):
             "created_at": now_iso(),
             "protected": True,
             "system_tag": "co_markup_audit",
+        })
+        self._save_notes(notes)
+
+    def _append_job_number_change_note(
+        self,
+        record_path: Path,
+        previous_job_number: str,
+        new_job_number: str,
+        override_used: bool = False,
+    ) -> None:
+        note_scope, record_rel = self._get_record_scope_and_rel_for_notes(record_path)
+        if not record_rel:
+            return
+
+        actor = self._current_username()
+        timestamp_text = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        previous_label = str(previous_job_number or "").strip() or "(blank)"
+        new_label = str(new_job_number or "").strip() or "(blank)"
+        override_label = "Yes" if override_used else "No"
+
+        notes = self._load_notes()
+        notes.append({
+            "id": str(uuid.uuid4()),
+            "type": "Communication",
+            "subject": "Job Number Updated",
+            "content": (
+                f"[{timestamp_text}] Job Number changed.\n"
+                f"User: {actor}\n"
+                f"Previous Job Number: {previous_label}\n"
+                f"New Job Number: {new_label}\n"
+                f"Override Used: {override_label}"
+            ),
+            "direction": "From",
+            "contact": "System",
+            "pinned": False,
+            "file_path": "",
+            "scope": note_scope,
+            "record_rel_path": record_rel,
+            "bid_rel_path": record_rel if note_scope == "bid" else "",
+            "created_at": now_iso(),
+            "protected": True,
+            "system_tag": "job_number_audit",
+        })
+        self._save_notes(notes)
+
+    def _append_gc_change_note(
+        self,
+        record_path: Path,
+        previous_gc: str,
+        new_gc: str,
+        override_used: bool = False,
+    ) -> None:
+        note_scope, record_rel = self._get_record_scope_and_rel_for_notes(record_path)
+        if not record_rel:
+            return
+
+        actor = self._current_username()
+        timestamp_text = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        previous_label = str(previous_gc or "").strip() or "(blank)"
+        new_label = str(new_gc or "").strip() or "(blank)"
+        override_label = "Yes" if override_used else "No"
+
+        notes = self._load_notes()
+        notes.append({
+            "id": str(uuid.uuid4()),
+            "type": "Communication",
+            "subject": "GC Updated",
+            "content": (
+                f"[{timestamp_text}] GC changed.\n"
+                f"User: {actor}\n"
+                f"Previous GC: {previous_label}\n"
+                f"New GC: {new_label}\n"
+                f"Override Used: {override_label}"
+            ),
+            "direction": "From",
+            "contact": "System",
+            "pinned": False,
+            "file_path": "",
+            "scope": note_scope,
+            "record_rel_path": record_rel,
+            "bid_rel_path": record_rel if note_scope == "bid" else "",
+            "created_at": now_iso(),
+            "protected": True,
+            "system_tag": "gc_audit",
         })
         self._save_notes(notes)
 
@@ -7396,6 +7869,7 @@ class MainWindow(QMainWindow):
         self.customers_info = self._load_customers()
         self.customers_contacts = self._load_customer_contacts()
         self.customers_contact_details = self._load_customer_contact_details()
+        self.customers_contact_records = self._load_customer_contact_records()
         return list(self.customers_info), dict(self.customers_contacts)
 
     def _refresh_customer_dropdowns(self):
@@ -7403,6 +7877,7 @@ class MainWindow(QMainWindow):
         self.customers_info = self._load_customers()
         self.customers_contacts = self._load_customer_contacts()
         self.customers_contact_details = self._load_customer_contact_details()
+        self.customers_contact_records = self._load_customer_contact_records()
 
         if not hasattr(self, "gc_combo"):
             return
@@ -7434,6 +7909,7 @@ class MainWindow(QMainWindow):
                 if idx < len(current_pocs) and current_pocs[idx]:
                     _poc.setEditText(current_pocs[idx])
                 self._update_gc_contact_details(idx)
+                self._refresh_additional_poc_options(idx)
         finally:
             for _gc in gc_combos:
                 _gc.blockSignals(False)
@@ -7835,7 +8311,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "lbl_due_label"):
             self.lbl_due_label.setVisible(in_bids)
         if hasattr(self, "lbl_estimator"):
-            self.lbl_estimator.setEnabled(in_bids)
+            self.lbl_estimator.setEnabled(True)
+            self.lbl_estimator.setReadOnly(in_projects)
             self.lbl_estimator.setToolTip("Locked on Projects" if in_projects else "")
         if hasattr(self, "lbl_proposal_type"):
             self.lbl_proposal_type.setVisible(in_bids)
@@ -7844,6 +8321,8 @@ class MainWindow(QMainWindow):
             self.lbl_proposal_type_label.setVisible(in_bids)
         if hasattr(self, "_kpi_type_card"):
             self._kpi_type_card.setVisible(in_bids)
+        if hasattr(self, "_kpi_job_card"):
+            self._kpi_job_card.setVisible(in_projects)
         if hasattr(self, "_kpi_days_sub_label"):
             self._kpi_days_sub_label.setText("% Complete" if in_projects else "Days Until Due")
         if hasattr(self, "list_widget"):
@@ -7882,6 +8361,12 @@ class MainWindow(QMainWindow):
             self.btn_add_gc.setVisible(in_bids)
         if hasattr(self, "btn_refresh_bid_total"):
             self.btn_refresh_bid_total.setVisible(in_bids)
+        for lbl in getattr(self, "invite_doc_row_labels", []):
+            lbl.setVisible(in_bids)
+        for w in getattr(self, "invite_doc_widgets", []):
+            w.setVisible(in_bids)
+
+        self._update_project_navigation_buttons()
 
         self._refresh_project_detail_view_tabs()
 
@@ -8173,6 +8658,35 @@ class MainWindow(QMainWindow):
         except Exception:
             return {}
 
+    def _load_customer_contact_records(self) -> Dict[str, List[Dict[str, str]]]:
+        """Load full customer contact records including position, email and phone."""
+        customers_contacts_path = self.paths.root / "customers_contacts.csv"
+        records: Dict[str, List[Dict[str, str]]] = {}
+
+        if not customers_contacts_path.exists():
+            return records
+
+        try:
+            with open(customers_contacts_path, 'r', newline='', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    customer_name = str(row.get("Customer Name", "") or "").strip()
+                    contact_name = str(row.get("Contact Name", "") or "").strip()
+                    position = str(row.get("Position", "") or "").strip()
+                    email = str(row.get("Email", "") or "").strip()
+                    phone = str(row.get("Phone", "") or "").strip()
+                    if not customer_name or not contact_name:
+                        continue
+                    records.setdefault(customer_name, []).append({
+                        "name": contact_name,
+                        "position": position,
+                        "email": email,
+                        "phone": phone,
+                    })
+            return records
+        except Exception:
+            return {}
+
     def save_details(self, path: Optional[Path] = None):
         """Save edited details back to info.json.
         
@@ -8191,14 +8705,29 @@ class MainWindow(QMainWindow):
             
             # Update editable fields
             previous_status = info.get("status", "")
+            previous_job_number = str(info.get("job_number", "") or "").strip()
+            previous_gc = str(info.get("gc", "") or "").strip()
+            _raw_previous_job_lock = info.get("job_number_locked", bool(previous_job_number))
+            if isinstance(_raw_previous_job_lock, str):
+                previous_job_number_locked = _raw_previous_job_lock.strip().lower() in {"1", "true", "yes", "y", "on"}
+            else:
+                previous_job_number_locked = bool(_raw_previous_job_lock)
+            _raw_previous_gc_lock = info.get("gc_locked", bool(previous_gc))
+            if isinstance(_raw_previous_gc_lock, str):
+                previous_gc_locked = _raw_previous_gc_lock.strip().lower() in {"1", "true", "yes", "y", "on"}
+            else:
+                previous_gc_locked = bool(_raw_previous_gc_lock)
             info["status"] = self.lbl_status.currentText().strip()
+            info["job_number"] = self.edit_job_number.text().strip()
+            info["job_number_locked"] = bool(info["job_number"])
             # Due date is bid-only.
             if self.current_category == "bids":
                 if self.lbl_due.date().isValid() and self.lbl_due.date() != self.lbl_due.minimumDate():
                     info["due_date"] = self.lbl_due.date().toString("yyyy-MM-dd")
                 else:
                     info["due_date"] = ""
-            info["estimator"] = self.lbl_estimator.currentText().strip()
+            if self.current_category == "bids":
+                info["estimator"] = self.lbl_estimator.text().strip()
             info["project_manager"] = self.lbl_project_manager.currentText().strip()
             if self.current_category == "bids":
                 info["proposal_type"] = self.lbl_proposal_type.currentText().strip()
@@ -8208,9 +8737,14 @@ class MainWindow(QMainWindow):
             gcs = [g for g in gcs if g]
             info["gcs"] = gcs
             info["gc"] = gcs[0] if gcs else ""
+            info["gc_locked"] = bool(info["gc"])
             pocs = [p.currentText().strip() for p in getattr(self, "poc_combos", [self.poc_combo])]
             info["pocs"] = pocs
             info["point_of_contact"] = pocs[0] if pocs else ""
+            additional_pocs: List[List[str]] = []
+            for selectors in getattr(self, "additional_poc_combos", []):
+                additional_pocs.append([c.currentText().strip() for c in selectors if c.currentText().strip()])
+            info["additional_pocs"] = additional_pocs
             invite_docs = [d.text().strip() for d in getattr(self, "invite_doc_edits", [])]
             info["invite_docs"] = invite_docs
             info["address"] = self.edit_address.toPlainText().strip()
@@ -8224,6 +8758,24 @@ class MainWindow(QMainWindow):
             write_info(p, info)
             self._invalidate_active_metrics_cache(p)
             self._on_bid_status_updated(p, previous_status, info.get("status", ""))
+            if previous_job_number != str(info.get("job_number", "") or "").strip():
+                self._append_job_number_change_note(
+                    p,
+                    previous_job_number,
+                    str(info.get("job_number", "") or "").strip(),
+                    override_used=self._job_number_override_used and previous_job_number_locked,
+                )
+            if previous_gc != str(info.get("gc", "") or "").strip():
+                self._append_gc_change_note(
+                    p,
+                    previous_gc,
+                    str(info.get("gc", "") or "").strip(),
+                    override_used=self._gc_override_used and previous_gc_locked,
+                )
+            self._job_number_override_used = False
+            self._gc_override_used = False
+            self._apply_job_number_lock_state(bool(info.get("job_number_locked", False)))
+            self._apply_gc_lock_state(bool(info.get("gc_locked", False)) and bool(info.get("gc", "")))
             self._has_unsaved_changes = False
             self._current_editing_path = p
             self.statusBar().showMessage("Details saved", 3000)
@@ -8432,6 +8984,7 @@ class MainWindow(QMainWindow):
                     "info": info,
                     "due": due,
                     "due_str": due_str,
+                    "job_number": str(info.get("job_number", "")).strip(),
                     "project_manager": project_manager,
                     "status": status,
                 })
@@ -8452,8 +9005,11 @@ class MainWindow(QMainWindow):
                 display_name = r["name"]
                 project_manager = str(r.get("project_manager", "")).strip()
                 due_str = str(r.get("due_str", "")).strip()
+                job_number = str(r.get("job_number", "")).strip()
                 status = str(r.get("status", "Submittals"))
                 info_bits = []
+                if job_number:
+                    info_bits.append(f"Job #: {job_number}")
                 if project_manager:
                     info_bits.append(project_manager)
                 if due_str:
@@ -8473,7 +9029,15 @@ class MainWindow(QMainWindow):
                     board_item = QListWidgetItem(display_name)
                     board_item.setData(Qt.ItemDataRole.UserRole, str(r["path"]))
                     status_list.addItem(board_item)
-                    board_widget = self._make_bid_card_widget("", display_name, due_str, "", project_manager)
+                    secondary_line = f"Job #: {job_number}" if job_number else ""
+                    board_widget = self._make_bid_card_widget(
+                        "",
+                        display_name,
+                        job_number if job_number else None,
+                        "",
+                        project_manager,
+                        secondary_text=secondary_line,
+                    )
                     board_item.setSizeHint(board_widget.sizeHint())
                     status_list.setItemWidget(board_item, board_widget)
 
@@ -8488,6 +9052,7 @@ class MainWindow(QMainWindow):
         self.list_widget.blockSignals(False)
         self._sync_bid_board_selection_from_list()
         self._sync_project_board_selection_from_list()
+        self._update_project_navigation_buttons()
 
         # Reset JSON editor for new list
         self._prev_selected_name = None
@@ -8571,6 +9136,36 @@ class MainWindow(QMainWindow):
             self.btn_project_task_add.setEnabled(enabled)
         if hasattr(self, "btn_project_note_add"):
             self.btn_project_note_add.setEnabled(enabled)
+        self._update_project_navigation_buttons()
+
+    def _navigate_project_selection(self, direction: int) -> None:
+        if self.current_category != "projects":
+            return
+        count = self.list_widget.count() if hasattr(self, "list_widget") else 0
+        if count <= 0:
+            return
+        row = self.list_widget.currentRow()
+        if row < 0:
+            row = 0 if direction >= 0 else count - 1
+        target = max(0, min(count - 1, row + direction))
+        if target == row:
+            return
+        self.list_widget.setCurrentRow(target)
+
+    def _update_project_navigation_buttons(self) -> None:
+        if not hasattr(self, "btn_prev_project") or not hasattr(self, "btn_next_project"):
+            return
+        in_projects = self.current_category == "projects"
+        self.btn_prev_project.setVisible(in_projects)
+        self.btn_next_project.setVisible(in_projects)
+        if not in_projects:
+            self.btn_prev_project.setEnabled(False)
+            self.btn_next_project.setEnabled(False)
+            return
+        count = self.list_widget.count() if hasattr(self, "list_widget") else 0
+        row = self.list_widget.currentRow() if hasattr(self, "list_widget") else -1
+        self.btn_prev_project.setEnabled(count > 0 and row > 0)
+        self.btn_next_project.setEnabled(count > 0 and row >= 0 and row < count - 1)
     # ---------- Selection & context ----------
 
     def _details_popup_title(self) -> str:
@@ -8748,6 +9343,13 @@ class MainWindow(QMainWindow):
                 f"border: none; background: transparent; font-size: 14px; font-weight: bold; color: {color};"
             )
 
+        if hasattr(self, "_kpi_job_number_label"):
+            job_number = self.edit_job_number.text().strip() if hasattr(self, "edit_job_number") else ""
+            self._kpi_job_number_label.setText(job_number or "-")
+            self._kpi_job_number_label.setStyleSheet(
+                "border: none; background: transparent; font-size: 14px; font-weight: bold; color: #E34D4D;"
+            )
+
         if hasattr(self, "_kpi_days_label"):
             if self.current_category == "projects":
                 pct_text = "-"
@@ -8892,6 +9494,8 @@ class MainWindow(QMainWindow):
     def _project_view_file_candidates(self, view_key: str) -> List[str]:
         if view_key == "financials":
             return ["Financials.csv"]
+        if view_key == "change_orders":
+            return ["Change Orders.csv", "Change_Orders.csv", "ChangeOrders.csv"]
         if view_key == "purchase_orders":
             return ["Purchase Orders.csv", "Purchase_Orders.csv", "PurchaseOrders.csv", "POs.csv"]
         if view_key == "work_orders":
@@ -8899,6 +9503,870 @@ class MainWindow(QMainWindow):
         if view_key == "scheduling":
             return ["Schedule.csv"]
         return []
+
+    # ── Helpers shared with project financials dashboard ──────────────────
+    @staticmethod
+    def _pd_hex_to_rgb(color_hex: str) -> Tuple[int, int, int]:
+        raw = str(color_hex or "").strip().lstrip("#")
+        if len(raw) != 6:
+            return (0, 0, 0)
+        try:
+            return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+        except ValueError:
+            return (0, 0, 0)
+
+    @staticmethod
+    def _pd_rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
+        r, g, b = rgb
+        return f"#{max(0, min(255, int(r))):02X}{max(0, min(255, int(g))):02X}{max(0, min(255, int(b))):02X}"
+
+    @classmethod
+    def _pd_mix_hex(cls, color_a: str, color_b: str, ratio: float) -> str:
+        ratio = max(0.0, min(1.0, float(ratio)))
+        a_r, a_g, a_b = cls._pd_hex_to_rgb(color_a)
+        b_r, b_g, b_b = cls._pd_hex_to_rgb(color_b)
+        mixed = (
+            int(round(a_r + (b_r - a_r) * ratio)),
+            int(round(a_g + (b_g - a_g) * ratio)),
+            int(round(a_b + (b_b - a_b) * ratio)),
+        )
+        return cls._pd_rgb_to_hex(mixed)
+
+    def _pd_build_dashboard_palette(self) -> Dict[str, str]:
+        tc = self.theme_colors if isinstance(getattr(self, "theme_colors", None), dict) else {}
+        window_bg = tc.get("window_bg", "#1E1E1E")
+        panel_bg = tc.get("panel_bg", "#252526")
+        input_bg = tc.get("input_bg", panel_bg)
+        text_primary = tc.get("text_primary", "#CCCCCC")
+        text_secondary = tc.get("text_secondary", "#858585")
+        accent = tc.get("accent", "#007ACC")
+        border = tc.get("gridline", tc.get("splitter", "#3E3E42"))
+        select_bg = tc.get("selection_bg", accent)
+        select_text = tc.get("selection_text", tc.get("button_text", "#FFFFFF"))
+
+        r, g, b = self._pd_hex_to_rgb(window_bg)
+        is_light = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0 >= 0.62
+        white = "#FFFFFF"
+        black = "#000000"
+        _mix = self._pd_mix_hex
+
+        if is_light:
+            card_bg = _mix(panel_bg, white, 0.10)
+            card_bg_alt = _mix(panel_bg, white, 0.18)
+            analytics_bg = _mix(panel_bg, white, 0.14)
+            table_bg = _mix(input_bg, white, 0.08)
+            header_bg = _mix(panel_bg, white, 0.02)
+            title_text = _mix(text_primary, black, 0.12)
+            muted_text = _mix(text_secondary, black, 0.18)
+            row_even = _mix(window_bg, white, 0.02)
+            row_odd = _mix(window_bg, white, 0.07)
+            row_total = _mix(panel_bg, white, 0.10)
+            row_major_bg = _mix(accent, white, 0.82)
+            row_major_total = _mix(accent, white, 0.74)
+            row_sub_bg = _mix(accent, white, 0.90)
+            row_sub_total = _mix(accent, white, 0.83)
+            row_major_text = _mix(text_primary, black, 0.24)
+            row_sub_text = _mix(text_primary, black, 0.16)
+            row_text = _mix(text_primary, black, 0.08)
+            input_cell_bg = _mix(accent, white, 0.84)
+            input_cell_active = _mix(accent, white, 0.74)
+            input_cell_text = _mix(text_primary, black, 0.30)
+            ring_border = _mix(border, white, 0.32)
+        else:
+            card_bg = "#1F2933"
+            card_bg_alt = "#1B2632"
+            analytics_bg = "#111B24"
+            table_bg = "#101923"
+            header_bg = "#1A2733"
+            title_text = "#D9E2EC"
+            muted_text = "#9FB3C8"
+            row_even = "#1D232B"
+            row_odd = "#181E26"
+            row_total = "#242C36"
+            row_major_bg = "#13364F"
+            row_major_total = "#16486A"
+            row_sub_bg = "#293645"
+            row_sub_total = "#354658"
+            row_major_text = "#EBF5FF"
+            row_sub_text = "#D8E4F0"
+            row_text = "#BAC6D4"
+            input_cell_bg = "#203447"
+            input_cell_active = "#274967"
+            input_cell_text = "#E5F1FB"
+            ring_border = "#2A3644"
+
+        return {
+            "window_bg": window_bg, "panel_bg": panel_bg,
+            "card_bg": card_bg, "card_bg_alt": card_bg_alt,
+            "analytics_bg": analytics_bg, "table_bg": table_bg,
+            "header_bg": header_bg, "title_text": title_text,
+            "muted_text": muted_text, "text_primary": text_primary,
+            "border": border,
+            "card_border": _mix(border, black if is_light else white, 0.0),
+            "accent": accent, "select_bg": select_bg, "select_text": select_text,
+            "row_even": row_even, "row_odd": row_odd, "row_total": row_total,
+            "row_major_bg": row_major_bg, "row_major_total": row_major_total,
+            "row_sub_bg": row_sub_bg, "row_sub_total": row_sub_total,
+            "row_major_text": row_major_text, "row_sub_text": row_sub_text,
+            "row_text": row_text,
+            "input_cell_bg": input_cell_bg, "input_cell_active": input_cell_active,
+            "input_cell_text": input_cell_text, "ring_border": ring_border,
+        }
+
+    # ── Project financials dashboard (mirrors workbook financials) ─────
+    def _build_project_financials_dashboard(self) -> QWidget:
+        if not hasattr(self, "_project_view_status_labels"):
+            self._project_view_status_labels: Dict[str, QLabel] = {}
+
+        pal = self._pd_build_dashboard_palette()
+        self._pd_fin_palette = pal
+        self._pd_fin_kpi_labels: Dict[str, QLabel] = {}
+        self._pd_fin_kpi_values: Dict[str, float] = {}
+        self._pd_fin_secondary_kpi_labels: Dict[str, QLabel] = {}
+        self._pd_fin_budget_labels: Dict[str, QLabel] = {}
+        self._pd_fin_opening_labels: Dict[str, QLabel] = {}
+        self._pd_fin_chart_widgets: Dict[str, Any] = {}
+
+        page = QWidget()
+        main_layout = QVBoxLayout(page)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(6)
+
+        status_label = QLabel("Select a project to load this view.")
+        status_label.setWordWrap(True)
+        status_label.setObjectName("projectViewStatus_financials")
+        self._project_view_status_labels["financials"] = status_label
+        main_layout.addWidget(status_label)
+
+        # ── KPI row ────────────────────────────────────────────────────
+        kpi_row = QHBoxLayout()
+        kpi_row.setSpacing(8)
+
+        def _make_kpi_card(title_text: str, key: str) -> QWidget:
+            card = QWidget()
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(10, 8, 10, 8)
+            card_layout.setSpacing(2)
+            title_lbl = QLabel(title_text)
+            title_lbl.setStyleSheet(f"color: {pal['muted_text']}; font-size: 11px;")
+            value_lbl = QLabel("-")
+            value_lbl.setStyleSheet(f"color: {pal['text_primary']}; font-size: 18px; font-weight: 600;")
+            value_row = QHBoxLayout()
+            value_row.setContentsMargins(0, 0, 0, 0)
+            value_row.setSpacing(6)
+            value_row.addWidget(value_lbl)
+            value_row.addStretch()
+            card_layout.addWidget(title_lbl)
+            card_layout.addLayout(value_row)
+            card_layout.addStretch()
+            card.setStyleSheet(
+                f"background-color: {pal['card_bg']};"
+                f"border: 1px solid {pal['card_border']};"
+                "border-radius: 6px;"
+            )
+            card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self._pd_fin_kpi_labels[key] = value_lbl
+            return card
+
+        kpi_row.addWidget(_make_kpi_card("Material Total", "material_total"))
+        kpi_row.addWidget(_make_kpi_card("Labor Total", "labor_total"))
+        kpi_row.addWidget(_make_kpi_card("Hard Cost Total", "hard_cost_total"))
+        kpi_row.addWidget(_make_kpi_card("Project Total", "bid_total"))
+        main_layout.addLayout(kpi_row)
+
+        # ── Body splitter (table | analytics | health/budget) ──────────
+        body_splitter = QSplitter(Qt.Orientation.Horizontal)
+        body_splitter.setChildrenCollapsible(False)
+        self._pd_fin_body_splitter = body_splitter
+
+        # -- LEFT: financials table inside a wrapper ---------
+        table_wrapper = QWidget()
+        tw_layout = QVBoxLayout(table_wrapper)
+        tw_layout.setContentsMargins(0, 0, 0, 0)
+        tw_layout.setSpacing(4)
+
+        table = QTableWidget()
+        table.setAlternatingRowColors(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setVisible(False)
+        table.verticalHeader().setVisible(False)
+        self._project_view_tables["financials"] = table
+        tw_layout.addWidget(table, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(8)
+        btn_load = QPushButton("Reload")
+        btn_load.clicked.connect(lambda: self._load_project_detail_table("financials", force_reload=True))
+        btn_open_ext = QPushButton("Open External")
+        btn_open_ext.clicked.connect(lambda: self._open_project_detail_view("financials"))
+        btn_open_folder = QPushButton("Open Folder")
+        btn_open_folder.clicked.connect(self._open_active_workbook_folder)
+        btn_row.addWidget(btn_load)
+        btn_row.addWidget(btn_open_ext)
+        btn_row.addWidget(btn_open_folder)
+        btn_row.addStretch(1)
+        tw_layout.addLayout(btn_row)
+        body_splitter.addWidget(table_wrapper)
+
+        # -- CENTER: Opening Analytics panel -----------------
+        analytics_panel = QWidget()
+        analytics_panel.setMinimumWidth(320)
+        analytics_layout = QVBoxLayout(analytics_panel)
+        analytics_layout.setContentsMargins(10, 10, 10, 10)
+        analytics_layout.setSpacing(8)
+
+        # DonutChartWidget as inner class (captures pal by reference)
+        palette_ref = pal
+
+        class _DonutChart(QWidget):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self._segments: list = []
+                self.setMinimumSize(130, 130)
+                self.setMaximumHeight(150)
+
+            def set_segments(self, segments):
+                self._segments = segments or []
+                self.update()
+
+            def paintEvent(self, _event):
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                diameter = min(self.width(), self.height()) - 20
+                if diameter <= 0:
+                    return
+                x = (self.width() - diameter) / 2
+                y = (self.height() - diameter) / 2
+                rect = QRectF(x, y, diameter, diameter)
+                if rect.width() <= 0 or rect.height() <= 0:
+                    return
+                ring_width = 14
+                painter.setPen(QPen(QColor(palette_ref['ring_border']), ring_width))
+                painter.drawArc(rect, 0, 360 * 16)
+                total = sum(max(0.0, float(seg[1])) for seg in self._segments)
+                if total <= 0:
+                    return
+                start_angle = 90 * 16
+                for _name, value, color in self._segments:
+                    val = max(0.0, float(value))
+                    if val <= 0:
+                        continue
+                    span = int(round((val / total) * 360 * 16))
+                    painter.setPen(QPen(color, ring_width))
+                    painter.drawArc(rect, start_angle, -span)
+                    start_angle -= span
+
+        self._pd_DonutChart = _DonutChart
+
+        analytics_title = QLabel("Opening Analytics")
+        analytics_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {pal['title_text']};")
+        analytics_layout.addWidget(analytics_title)
+
+        def _add_metric_row(label_text: str, key: str):
+            row_w = QWidget()
+            rl = QHBoxLayout(row_w)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            kl = QLabel(label_text)
+            kl.setStyleSheet(f"color: {pal['muted_text']}; font-size: 11px;")
+            vl = QLabel("-")
+            vl.setStyleSheet(f"color: {pal['text_primary']}; font-size: 11px; font-weight: 600;")
+            vl.setWordWrap(True)
+            rl.addWidget(kl)
+            rl.addStretch()
+            rl.addWidget(vl)
+            analytics_layout.addWidget(row_w)
+            self._pd_fin_opening_labels[key] = vl
+
+        _add_metric_row("Opening Count", "opening_count")
+        _add_metric_row("Average Sell / Opening", "avg_sell")
+        _add_metric_row("Unquoted Scope %", "unquoted_scope")
+
+        material_metrics_title = QLabel("Openings & Avg Cost by Material Type")
+        material_metrics_title.setStyleSheet(f"color: {pal['muted_text']}; font-size: 11px;")
+        analytics_layout.addWidget(material_metrics_title)
+        self._pd_fin_breakout_title = material_metrics_title
+        material_metrics_label = QLabel("-")
+        material_metrics_label.setWordWrap(True)
+        material_metrics_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        material_metrics_label.setStyleSheet(f"color: {pal['text_primary']}; font-size: 11px; font-weight: 600;")
+        analytics_layout.addWidget(material_metrics_label)
+        self._pd_fin_opening_labels["material_metrics"] = material_metrics_label
+
+        top_cost_title = QLabel("Top 3 Cost Drivers")
+        top_cost_title.setStyleSheet(f"color: {pal['muted_text']}; font-size: 11px;")
+        analytics_layout.addWidget(top_cost_title)
+
+        self._pd_fin_chart_widgets["top3"] = []
+        for idx in range(3):
+            row_w = QWidget()
+            rl = QHBoxLayout(row_w)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            name_lbl = QLabel(f"{idx + 1}.")
+            name_lbl.setMinimumWidth(120)
+            name_lbl.setStyleSheet(f"color: {pal['muted_text']}; font-size: 10px;")
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            bar.setValue(0)
+            bar.setTextVisible(False)
+            bar.setFixedHeight(10)
+            val_lbl = QLabel("-")
+            val_lbl.setMinimumWidth(80)
+            val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            val_lbl.setStyleSheet(f"color: {pal['text_primary']}; font-size: 10px; font-weight: 600;")
+            rl.addWidget(name_lbl)
+            rl.addWidget(bar, 1)
+            rl.addWidget(val_lbl)
+            analytics_layout.addWidget(row_w)
+            self._pd_fin_chart_widgets["top3"].append({"name": name_lbl, "bar": bar, "value": val_lbl})
+
+        mat_labor_title = QLabel("Material vs Labor")
+        mat_labor_title.setStyleSheet(f"color: {pal['muted_text']}; font-size: 11px;")
+        analytics_layout.addWidget(mat_labor_title)
+        mat_labor_donut = _DonutChart()
+        analytics_layout.addWidget(mat_labor_donut)
+        self._pd_fin_chart_widgets["material_labor_donut"] = mat_labor_donut
+        mat_labor_legend = QLabel("-")
+        mat_labor_legend.setWordWrap(True)
+        mat_labor_legend.setStyleSheet(f"color: {pal['text_primary']}; font-size: 10px; font-weight: 600;")
+        analytics_layout.addWidget(mat_labor_legend)
+        self._pd_fin_opening_labels["material_labor_legend"] = mat_labor_legend
+
+        mat_lbl = QLabel("Material: -")
+        mat_lbl.setStyleSheet("color: #7FB4E8; font-size: 10px; font-weight: 600;")
+        analytics_layout.addWidget(mat_lbl)
+        self._pd_fin_opening_labels["material_labor_material"] = mat_lbl
+
+        labor_lbl = QLabel("Labor: -")
+        labor_lbl.setStyleSheet("color: #87D087; font-size: 10px; font-weight: 600;")
+        analytics_layout.addWidget(labor_lbl)
+        self._pd_fin_opening_labels["material_labor_labor"] = labor_lbl
+
+        quoted_title = QLabel("Quoted vs Unquoted Sell")
+        quoted_title.setStyleSheet(f"color: {pal['muted_text']}; font-size: 11px;")
+        analytics_layout.addWidget(quoted_title)
+        quoted_donut = _DonutChart()
+        analytics_layout.addWidget(quoted_donut)
+        self._pd_fin_chart_widgets["quoted_scope_donut"] = quoted_donut
+        quoted_legend = QLabel("-")
+        quoted_legend.setWordWrap(True)
+        quoted_legend.setStyleSheet(f"color: {pal['text_primary']}; font-size: 10px; font-weight: 600;")
+        analytics_layout.addWidget(quoted_legend)
+        self._pd_fin_opening_labels["quoted_scope_legend"] = quoted_legend
+
+        quoted_lbl = QLabel("Quoted: -")
+        quoted_lbl.setStyleSheet("color: #72C393; font-size: 10px; font-weight: 600;")
+        analytics_layout.addWidget(quoted_lbl)
+        self._pd_fin_opening_labels["quoted_scope_quoted"] = quoted_lbl
+
+        unquoted_lbl = QLabel("Unquoted: -")
+        unquoted_lbl.setStyleSheet("color: #D07A7A; font-size: 10px; font-weight: 600;")
+        analytics_layout.addWidget(unquoted_lbl)
+        self._pd_fin_opening_labels["quoted_scope_unquoted"] = unquoted_lbl
+        analytics_layout.addStretch()
+
+        analytics_panel.setStyleSheet(
+            f"background-color: {pal['analytics_bg']};"
+            f"border: 1px solid {pal['card_border']};"
+            "border-radius: 6px;"
+        )
+        body_splitter.addWidget(analytics_panel)
+
+        # -- RIGHT: Project Health + Budget panel ------------
+        outer = QWidget()
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(10, 8, 10, 8)
+        panel_layout.setSpacing(4)
+
+        health_title = QLabel("Project Health")
+        health_title.setStyleSheet(f"color: {pal['muted_text']}; font-size: 11px; font-weight: 600;")
+        panel_layout.addWidget(health_title)
+
+        def _add_panel_metric(label_text: str, key: str, store: dict):
+            row_w = QWidget()
+            rl = QHBoxLayout(row_w)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            kl = QLabel(label_text)
+            kl.setStyleSheet(f"color: {pal['muted_text']}; font-size: 10px;")
+            vl = QLabel("-")
+            vl.setStyleSheet(f"color: {pal['text_primary']}; font-size: 11px; font-weight: 600;")
+            rl.addWidget(kl)
+            rl.addStretch()
+            rl.addWidget(vl)
+            panel_layout.addWidget(row_w)
+            store[key] = vl
+
+        _add_panel_metric("Avg Sell / Opening", "avg_sell_opening", self._pd_fin_secondary_kpi_labels)
+        _add_panel_metric("OH&P $", "ohp_total", self._pd_fin_secondary_kpi_labels)
+        _add_panel_metric("OH&P % of Project", "ohp_pct_bid", self._pd_fin_secondary_kpi_labels)
+        _add_panel_metric("Profit / Opening", "profit_per_opening", self._pd_fin_secondary_kpi_labels)
+        _add_panel_metric("Avg Cost / Opening", "avg_cost_opening", self._pd_fin_secondary_kpi_labels)
+        _add_panel_metric("Unquoted Scope", "unquoted_scope", self._pd_fin_secondary_kpi_labels)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {pal['card_border']};")
+        panel_layout.addWidget(sep)
+
+        budget_title = QLabel("Budget")
+        budget_title.setStyleSheet(f"color: {pal['muted_text']}; font-size: 11px; font-weight: 600;")
+        panel_layout.addWidget(budget_title)
+
+        _add_panel_metric("Supervision Hrs", "supervision_hrs", self._pd_fin_budget_labels)
+        _add_panel_metric("Supervision $", "supervision_cost", self._pd_fin_budget_labels)
+        _add_panel_metric("Deliv/Stock/Clean Hrs", "dsc_hrs", self._pd_fin_budget_labels)
+        _add_panel_metric("Deliv/Stock/Clean $", "dsc_cost", self._pd_fin_budget_labels)
+
+        labor_sep = QFrame()
+        labor_sep.setFrameShape(QFrame.Shape.HLine)
+        labor_sep.setStyleSheet(f"color: {pal['card_border']};")
+        panel_layout.addWidget(labor_sep)
+
+        labor_hdr = QLabel("Labor (incl. Misc %)")
+        labor_hdr.setStyleSheet(f"color: {pal['muted_text']}; font-size: 10px; font-style: italic;")
+        panel_layout.addWidget(labor_hdr)
+
+        _add_panel_metric("  Doors", "labor_doors_hrs", self._pd_fin_budget_labels)
+        _add_panel_metric("  Frames", "labor_frames_hrs", self._pd_fin_budget_labels)
+        _add_panel_metric("  Hardware", "labor_hardware_hrs", self._pd_fin_budget_labels)
+        _add_panel_metric("  Misc Cost", "labor_misc_hrs", self._pd_fin_budget_labels)
+        _add_panel_metric("  Labor Total", "labor_budget_total", self._pd_fin_budget_labels)
+
+        mat_sep = QFrame()
+        mat_sep.setFrameShape(QFrame.Shape.HLine)
+        mat_sep.setStyleSheet(f"color: {pal['card_border']};")
+        panel_layout.addWidget(mat_sep)
+
+        mat_hdr = QLabel("Material (incl. Misc % + Tax)")
+        mat_hdr.setStyleSheet(f"color: {pal['muted_text']}; font-size: 10px; font-style: italic;")
+        panel_layout.addWidget(mat_hdr)
+
+        _add_panel_metric("  Doors", "mat_doors", self._pd_fin_budget_labels)
+        _add_panel_metric("  Frames", "mat_frames", self._pd_fin_budget_labels)
+        _add_panel_metric("  Hardware", "mat_hardware", self._pd_fin_budget_labels)
+        _add_panel_metric("  Misc Cost", "mat_misc", self._pd_fin_budget_labels)
+        _add_panel_metric("  Material Total", "mat_budget_total", self._pd_fin_budget_labels)
+
+        sub_sep = QFrame()
+        sub_sep.setFrameShape(QFrame.Shape.HLine)
+        sub_sep.setStyleSheet(f"color: {pal['card_border']};")
+        panel_layout.addWidget(sub_sep)
+
+        _add_panel_metric("Subcontracts", "subcontracts_total", self._pd_fin_budget_labels)
+
+        panel_layout.addStretch()
+        scroll.setWidget(panel)
+        outer_layout.addWidget(scroll)
+        outer.setStyleSheet(
+            f"background-color: {pal['card_bg_alt']};"
+            f"border: 1px solid {pal['card_border']};"
+            "border-radius: 6px;"
+        )
+        outer.setMinimumWidth(260)
+        outer.setMaximumWidth(320)
+        body_splitter.addWidget(outer)
+
+        body_splitter.setStretchFactor(0, 7)
+        body_splitter.setStretchFactor(1, 5)
+        body_splitter.setStretchFactor(2, 2)
+        QTimer.singleShot(0, lambda: body_splitter.setSizes([360, 860, 260]))
+        main_layout.addWidget(body_splitter, 1)
+
+        return page
+
+    # ── Project financials dashboard data updater ──────────────────────
+    def _update_project_financials_dashboard(self) -> None:
+        """Populate all KPI, analytics, health and budget panels from the loaded
+        project financials table and any available schedule data."""
+        table = self._project_view_tables.get("financials")
+        if table is None or table.rowCount() == 0:
+            return
+        pal = getattr(self, "_pd_fin_palette", {})
+        if not pal:
+            return
+
+        # --- helper to parse dollar/number text ---------
+        def _pn(text: str) -> float:
+            cleaned = str(text).strip().replace("$", "").replace(",", "").replace("%", "")
+            if not cleaned:
+                return 0.0
+            try:
+                return float(cleaned)
+            except ValueError:
+                return 0.0
+
+        # Retrieve cached headers from the table path
+        csv_path = self._project_view_table_paths.get("financials")
+        if csv_path is None:
+            return
+        headers_raw, _ = self._read_csv_table(csv_path)
+        if not headers_raw:
+            return
+        headers = headers_raw
+
+        total_col = self._get_header_index(headers, "Total")
+        rate_col = self._get_header_index(headers, "Rate")
+        count_col_fin = self._get_header_index(headers, "Count")
+        desc_col = self._get_header_index(headers, "Description") or 0
+
+        if total_col is None:
+            return
+
+        # Helper: find row by description
+        def _find_row(label: str) -> Optional[int]:
+            target = (label or "").strip().lower().rstrip(':')
+            for row in range(table.rowCount()):
+                item = table.item(row, desc_col)
+                txt = item.text().strip().lower().rstrip(':') if item else ""
+                # Account for "Bid" → "Project" renaming
+                txt = txt.replace("project", "bid")
+                if txt == target:
+                    return row
+            return None
+
+        def _cell_num(row_idx: Optional[int], col_idx: Optional[int]) -> float:
+            if row_idx is None or col_idx is None:
+                return 0.0
+            cell = table.item(row_idx, col_idx)
+            return _pn(cell.text() if cell else "")
+
+        # ── KPI cards ──────────────────────────────────────────────
+        major_totals_map = {
+            "material_total": "material total",
+            "labor_total": "labor total",
+            "hard_cost_total": "hard cost total",
+        }
+        for kpi_key, row_label in major_totals_map.items():
+            row_idx = _find_row(row_label)
+            val = _cell_num(row_idx, total_col)
+            self._pd_fin_kpi_values[kpi_key] = val
+            lbl = self._pd_fin_kpi_labels.get(kpi_key)
+            if lbl is not None:
+                lbl.setText(f"${val:,.2f}" if val else "-")
+
+        bid_row = _find_row("bid total")
+        bid_val = _cell_num(bid_row, total_col)
+        self._pd_fin_kpi_values["bid_total"] = bid_val
+        bid_lbl = self._pd_fin_kpi_labels.get("bid_total")
+        if bid_lbl is not None:
+            bid_lbl.setText(f"${bid_val:,.2f}" if bid_val else "-")
+
+        # ── Secondary KPIs (Project Health) ────────────────────────
+        ohp_row = _find_row("oh & p")
+        ohp_total = _cell_num(ohp_row, total_col)
+        ohp_pct = (ohp_total / bid_val * 100.0) if bid_val > 0 else 0.0
+        if self._pd_fin_secondary_kpi_labels.get("ohp_total"):
+            self._pd_fin_secondary_kpi_labels["ohp_total"].setText(f"${ohp_total:,.0f}")
+        if self._pd_fin_secondary_kpi_labels.get("ohp_pct_bid"):
+            self._pd_fin_secondary_kpi_labels["ohp_pct_bid"].setText(f"{ohp_pct:.1f}%")
+
+        # ── Budget section ─────────────────────────────────────────
+        supervision_row = _find_row("supervision")
+        dsc_row = _find_row("delivery/stocking/clean up")
+        labor_row = _find_row("labor")
+        misc_labor_row = _find_row("misc. labor")
+        misc_mat_row = _find_row("misc. material")
+        tax_row = _find_row("tax")
+        sub_hard_row = _find_row("sub hard cost total")
+        sub_ohp_row = _find_row("sub oh & p")
+
+        labor_rate = _cell_num(labor_row, rate_col) if rate_col is not None else 0.0
+        supervision_total = _cell_num(supervision_row, total_col)
+        dsc_total = _cell_num(dsc_row, total_col)
+        dsc_hours = _cell_num(dsc_row, count_col_fin) if count_col_fin is not None else 0.0
+        misc_labor_pct = _cell_num(misc_labor_row, rate_col) if rate_col is not None else 0.0
+        misc_mat_pct = _cell_num(misc_mat_row, rate_col) if rate_col is not None else 0.0
+        tax_rate = _cell_num(tax_row, rate_col) if rate_col is not None else 0.0
+        sub_hard_total = _cell_num(sub_hard_row, total_col)
+        sub_ohp_total = _cell_num(sub_ohp_row, total_col)
+        subcontracts = sub_hard_total + sub_ohp_total
+
+        supervision_hrs = (supervision_total / labor_rate) if labor_rate > 0 else 0.0
+
+        bl = self._pd_fin_budget_labels
+        if bl.get("supervision_hrs"):
+            bl["supervision_hrs"].setText(f"{supervision_hrs:,.1f}")
+        if bl.get("supervision_cost"):
+            bl["supervision_cost"].setText(f"${supervision_total:,.0f}")
+        if bl.get("dsc_hrs"):
+            bl["dsc_hrs"].setText(f"{dsc_hours:,.1f}")
+        if bl.get("dsc_cost"):
+            bl["dsc_cost"].setText(f"${dsc_total:,.0f}")
+
+        # ── Load schedule data for analytics ───────────────────────
+        parent_path = self._selected_parent_for_project_views()
+        active_wb = self._get_active_workbook_path(parent_path) if parent_path else None
+        schedule_headers: List[str] = []
+        schedule_rows: List[List[str]] = []
+        if active_wb:
+            for sched_name in ("Schedule.csv",):
+                sched_path = active_wb / sched_name
+                if sched_path.exists():
+                    schedule_headers, schedule_rows = self._read_csv_table(sched_path)
+                    break
+
+        # Helper for schedule columns
+        def _sched_col(name: str) -> Optional[int]:
+            return self._get_header_index(schedule_headers, name) if schedule_headers else None
+
+        def _sched_sum(col_name: str) -> float:
+            ci = _sched_col(col_name)
+            if ci is None:
+                return 0.0
+            return sum(_pn(r[ci]) for r in schedule_rows if ci < len(r))
+
+        # Labor/material by category from schedule for budget
+        door_cost = _sched_sum("Door Cost")
+        frame_cost = _sched_sum("Frame Cost")
+        hw_cost = _sched_sum("Hardware Cost")
+        door_labor = _sched_sum("Door Labor")
+        frame_labor = _sched_sum("Frame Labor")
+        hw_labor = _sched_sum("Hardware Labor")
+
+        misc_labor_mult = 1.0 + misc_labor_pct
+        labor_door_cost = door_labor * labor_rate * misc_labor_mult
+        labor_frame_cost = frame_labor * labor_rate * misc_labor_mult
+        labor_hw_cost = hw_labor * labor_rate * misc_labor_mult
+        labor_budget_total = labor_door_cost + labor_frame_cost + labor_hw_cost
+
+        if bl.get("labor_doors_hrs"):
+            bl["labor_doors_hrs"].setText(f"{door_labor:,.1f} hrs | ${labor_door_cost:,.0f}")
+        if bl.get("labor_frames_hrs"):
+            bl["labor_frames_hrs"].setText(f"{frame_labor:,.1f} hrs | ${labor_frame_cost:,.0f}")
+        if bl.get("labor_hardware_hrs"):
+            bl["labor_hardware_hrs"].setText(f"{hw_labor:,.1f} hrs | ${labor_hw_cost:,.0f}")
+        if bl.get("labor_misc_hrs"):
+            bl["labor_misc_hrs"].setText(f"0.0 hrs | $0")
+        if bl.get("labor_budget_total"):
+            total_hrs = door_labor + frame_labor + hw_labor
+            bl["labor_budget_total"].setText(f"{total_hrs:,.1f} hrs | ${labor_budget_total:,.0f}")
+
+        mat_full_mult = (1.0 + misc_mat_pct) * (1.0 + tax_rate)
+        mat_door = door_cost * mat_full_mult
+        mat_frame = frame_cost * mat_full_mult
+        mat_hw = hw_cost * mat_full_mult
+
+        if bl.get("mat_doors"):
+            bl["mat_doors"].setText(f"${mat_door:,.0f}")
+        if bl.get("mat_frames"):
+            bl["mat_frames"].setText(f"${mat_frame:,.0f}")
+        if bl.get("mat_hardware"):
+            bl["mat_hardware"].setText(f"${mat_hw:,.0f}")
+        if bl.get("mat_misc"):
+            bl["mat_misc"].setText("$0")
+        if bl.get("mat_budget_total"):
+            bl["mat_budget_total"].setText(f"${mat_door + mat_frame + mat_hw:,.0f}")
+        if bl.get("subcontracts_total"):
+            bl["subcontracts_total"].setText(f"${subcontracts:,.0f}")
+
+        # ── Opening Analytics ──────────────────────────────────────
+        if not schedule_headers:
+            for k in ("opening_count", "avg_sell", "unquoted_scope", "material_metrics"):
+                lbl_ref = self._pd_fin_opening_labels.get(k)
+                if lbl_ref is not None:
+                    lbl_ref.setText("-" if k != "material_metrics" else "No schedule data")
+            skl = self._pd_fin_secondary_kpi_labels
+            for k in ("avg_cost_opening", "avg_sell_opening", "profit_per_opening", "unquoted_scope"):
+                if skl.get(k):
+                    skl[k].setText("-")
+            return
+
+        mat_type_col = _sched_col("Material Type")
+        sell_col: Optional[int] = None
+        for cand in ("Total Sell", "Sell Total", "Total", "Sell"):
+            idx = _sched_col(cand)
+            if idx is not None:
+                sell_col = idx
+                break
+        cost_col = _sched_col("Total Cost")
+        count_col = _sched_col("Count")
+
+        total_openings = 0.0
+        total_sell = 0.0
+        total_cost = 0.0
+        material_rollups: Dict[str, Dict[str, float]] = {}
+
+        for row in schedule_rows:
+            mat_text = ""
+            if mat_type_col is not None and mat_type_col < len(row):
+                mat_text = row[mat_type_col].strip()
+            count_val = 1.0
+            if count_col is not None and count_col < len(row):
+                parsed = _pn(row[count_col])
+                if parsed > 0:
+                    count_val = parsed
+            s_val = _pn(row[sell_col]) if sell_col is not None and sell_col < len(row) else 0.0
+            c_val = _pn(row[cost_col]) if cost_col is not None and cost_col < len(row) else 0.0
+
+            if not mat_text and s_val == 0.0 and c_val == 0.0 and count_val == 1.0:
+                if count_col is not None and count_col < len(row) and not row[count_col].strip():
+                    continue
+
+            total_openings += count_val
+            total_sell += s_val
+            total_cost += c_val
+
+            bk = mat_text if mat_text else "UNSPEC"
+            if bk not in material_rollups:
+                material_rollups[bk] = {"openings": 0.0, "sell": 0.0}
+            material_rollups[bk]["openings"] += count_val
+            material_rollups[bk]["sell"] += s_val
+
+        avg_sell = (total_sell / total_openings) if total_openings > 0 else 0.0
+        avg_cost = (total_cost / total_openings) if total_openings > 0 else 0.0
+
+        ol = self._pd_fin_opening_labels
+        if ol.get("opening_count"):
+            oc_txt = str(int(total_openings)) if float(total_openings).is_integer() else f"{total_openings:.1f}"
+            ol["opening_count"].setText(oc_txt)
+        if ol.get("avg_sell"):
+            ol["avg_sell"].setText(f"${avg_sell:,.2f}")
+
+        # Quoted / unquoted analysis from source CSVs
+        quoted_total_sell = 0.0
+        quoted_unquoted_sell = 0.0
+        if active_wb:
+            for stem_pattern, csv_names in [
+                ("door", ["Doors.csv", "Door_Schedule.csv"]),
+                ("frame", ["Frames.csv", "Frame_Schedule.csv"]),
+                ("hardware", ["Hardware.csv", "Hardware_Schedule.csv"]),
+            ]:
+                for cn in csv_names:
+                    cp = active_wb / cn
+                    if cp.exists():
+                        src_h, src_rows = self._read_csv_table(cp)
+                        if not src_h:
+                            continue
+                        q_col = self._get_header_index(src_h, "Quoted")
+                        s_col = None
+                        for cand in ("Sell", "Total Sell", "Sell Total", "Total"):
+                            idx = self._get_header_index(src_h, cand)
+                            if idx is not None:
+                                s_col = idx
+                                break
+                        if q_col is None or s_col is None:
+                            continue
+                        for sr in src_rows:
+                            sv = _pn(sr[s_col]) if s_col < len(sr) else 0.0
+                            if sv <= 0:
+                                continue
+                            q_text = sr[q_col].strip().lower() if q_col < len(sr) else ""
+                            is_q = q_text in ("yes", "x", "1", "true", "checked")
+                            quoted_total_sell += sv
+                            if not is_q:
+                                quoted_unquoted_sell += sv
+                        break  # found this category's CSV
+
+        unquoted_base = quoted_total_sell if quoted_total_sell > 0 else total_sell
+        unquoted_pct = (quoted_unquoted_sell / unquoted_base * 100.0) if unquoted_base > 0 else 0.0
+        if ol.get("unquoted_scope"):
+            ol["unquoted_scope"].setText(f"{unquoted_pct:.1f}%")
+
+        # Secondary KPIs: avg sell/cost per opening, profit per opening
+        skl = self._pd_fin_secondary_kpi_labels
+        hard_cost_total = self._pd_fin_kpi_values.get("hard_cost_total", 0.0)
+        profit_total = bid_val - hard_cost_total
+        profit_per_opening = (profit_total / total_openings) if total_openings > 0 else 0.0
+        if skl.get("avg_sell_opening"):
+            skl["avg_sell_opening"].setText(f"${avg_sell:,.2f}")
+        if skl.get("avg_cost_opening"):
+            skl["avg_cost_opening"].setText(f"${avg_cost:,.2f}")
+        if skl.get("profit_per_opening"):
+            skl["profit_per_opening"].setText(f"${profit_per_opening:,.2f}")
+        if skl.get("unquoted_scope"):
+            skl["unquoted_scope"].setText(f"{unquoted_pct:.1f}%")
+
+        # Material metrics breakdown
+        if material_rollups and ol.get("material_metrics"):
+            lines = []
+            for mat, vals in sorted(material_rollups.items()):
+                mo = vals["openings"]
+                ma = (vals["sell"] / mo) if mo > 0 else 0.0
+                mo_txt = str(int(mo)) if float(mo).is_integer() else f"{mo:.1f}"
+                lines.append(f"{mat}: {mo_txt} openings | ${ma:,.2f} avg sell/opening")
+            ol["material_metrics"].setText("\n".join(lines))
+
+        # Top 3 cost drivers
+        top_rows = self._pd_fin_chart_widgets.get("top3", [])
+        top_drivers = sorted(material_rollups.items(), key=lambda kv: kv[1]["sell"], reverse=True)[:3]
+        top_base = top_drivers[0][1]["sell"] if top_drivers else 1.0
+
+        def _set_bar(bar: QProgressBar, pct: float, color_hex: str):
+            clamped = max(0.0, min(100.0, pct))
+            bar.setValue(int(clamped * 10))
+            bar.setStyleSheet(
+                "QProgressBar {"
+                f" background-color: {pal['analytics_bg']};"
+                f" border: 1px solid {pal['card_border']};"
+                " border-radius: 4px;"
+                " }"
+                f"QProgressBar::chunk {{ background-color: {color_hex}; border-radius: 3px; }}"
+            )
+
+        for idx, row_data in enumerate(list(top_rows)):
+            if idx >= len(top_drivers):
+                row_data["name"].setText(f"{idx + 1}.")
+                _set_bar(row_data["bar"], 0.0, "#647A92")
+                row_data["value"].setText("-")
+                continue
+            label_key, vals = top_drivers[idx]
+            sell_top = vals["sell"]
+            pct = (sell_top / top_base) * 100.0 if top_base > 0 else 0.0
+            row_data["name"].setText(f"{idx + 1}. {label_key}")
+            _set_bar(row_data["bar"], pct, "#758FB6")
+            row_data["value"].setText(f"${sell_top:,.0f}")
+
+        # Material vs Labor donut
+        material_total = self._pd_fin_kpi_values.get("material_total", 0.0)
+        labor_total_val = self._pd_fin_kpi_values.get("labor_total", 0.0)
+        ml_donut = self._pd_fin_chart_widgets.get("material_labor_donut")
+        if ml_donut is not None and hasattr(ml_donut, "set_segments"):
+            ml_donut.set_segments([
+                ("Material", material_total, QColor("#4F8BC9")),
+                ("Labor", labor_total_val, QColor("#6CB36C")),
+            ])
+        ml_base = material_total + labor_total_val
+        mat_pct = (material_total / ml_base * 100.0) if ml_base > 0 else 0.0
+        lab_pct = (labor_total_val / ml_base * 100.0) if ml_base > 0 else 0.0
+        if ol.get("material_labor_legend"):
+            ol["material_labor_legend"].setText(
+                f"Material ${material_total:,.0f} ({mat_pct:.1f}%) | Labor ${labor_total_val:,.0f} ({lab_pct:.1f}%)"
+            )
+        if ol.get("material_labor_material"):
+            ol["material_labor_material"].setText(f"Material: ${material_total:,.0f} ({mat_pct:.1f}%)")
+        if ol.get("material_labor_labor"):
+            ol["material_labor_labor"].setText(f"Labor: ${labor_total_val:,.0f} ({lab_pct:.1f}%)")
+
+        # Quoted vs Unquoted donut
+        quoted_sell = max(0.0, quoted_total_sell - quoted_unquoted_sell)
+        q_base = quoted_total_sell if quoted_total_sell > 0 else 1.0
+        q_pct = (quoted_sell / q_base) * 100.0
+        u_pct = (quoted_unquoted_sell / q_base) * 100.0
+        q_donut = self._pd_fin_chart_widgets.get("quoted_scope_donut")
+        if q_donut is not None and hasattr(q_donut, "set_segments"):
+            q_donut.set_segments([
+                ("Quoted", quoted_sell, QColor("#3F9E6F")),
+                ("Unquoted", quoted_unquoted_sell, QColor("#C56565")),
+            ])
+        if ol.get("quoted_scope_legend"):
+            ol["quoted_scope_legend"].setText(
+                f"Quoted ${quoted_sell:,.0f} ({q_pct:.1f}%) | Unquoted ${quoted_unquoted_sell:,.0f} ({u_pct:.1f}%)"
+            )
+        if ol.get("quoted_scope_quoted"):
+            ol["quoted_scope_quoted"].setText(f"Quoted: ${quoted_sell:,.0f} ({q_pct:.1f}%)")
+        if ol.get("quoted_scope_unquoted"):
+            ol["quoted_scope_unquoted"].setText(f"Unquoted: ${quoted_unquoted_sell:,.0f} ({u_pct:.1f}%)")
 
     def _build_project_detail_utility_tab(self, view_key: str, title: str, subtitle: str, button_text: str) -> QWidget:
         if not hasattr(self, "_project_view_status_labels"):
@@ -8922,26 +10390,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(subtitle_label)
         layout.addWidget(status_label)
 
-        is_embedded_table_view = view_key in {"financials", "purchase_orders", "work_orders"}
+        is_embedded_table_view = view_key in {"purchase_orders", "work_orders"}
 
         if is_embedded_table_view:
             table = QTableWidget()
             table.setAlternatingRowColors(True)
-            if view_key == "financials":
-                table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                # Financials table: hide headers to match workbook style
-                table.horizontalHeader().setVisible(False)
-            else:
-                table.setEditTriggers(
-                    QAbstractItemView.EditTrigger.DoubleClicked
-                    | QAbstractItemView.EditTrigger.EditKeyPressed
-                    | QAbstractItemView.EditTrigger.AnyKeyPressed
-                )
-                table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            table.setEditTriggers(
+                QAbstractItemView.EditTrigger.DoubleClicked
+                | QAbstractItemView.EditTrigger.EditKeyPressed
+                | QAbstractItemView.EditTrigger.AnyKeyPressed
+            )
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
             table.verticalHeader().setVisible(False)
             self._project_view_tables[view_key] = table
-            if view_key != "financials":
-                table.itemChanged.connect(lambda _item=None, key=view_key: self._project_view_dirty.__setitem__(key, True))
+            table.itemChanged.connect(lambda _item=None, key=view_key: self._project_view_dirty.__setitem__(key, True))
 
             btn_load = QPushButton("Reload")
             btn_load.clicked.connect(lambda _checked=False, key=view_key: self._load_project_detail_table(key, force_reload=True))
@@ -8966,91 +10428,8 @@ class MainWindow(QMainWindow):
             button_row.addStretch(1)
 
             layout.addLayout(button_row)
-            
-            if view_key == "financials":
-                # Create a tab widget for Financials data and Change Order Log
-                financials_tabs = QTabWidget()
-                
-                # Financials table tab
-                financials_table_page = QWidget()
-                financials_table_layout = QVBoxLayout(financials_table_page)
-                financials_table_layout.setContentsMargins(0, 0, 0, 0)
-                financials_table_layout.addWidget(table, 1)
-                financials_tabs.addTab(financials_table_page, "Financials")
-                
-                layout.addWidget(financials_tabs, 1)
-            else:
-                layout.addWidget(table, 1)
 
-            if view_key == "financials":
-                # Change Order Log in its own tab
-                co_page = QWidget()
-                co_layout = QVBoxLayout(co_page)
-                co_layout.setContentsMargins(0, 0, 0, 0)
-                co_layout.setSpacing(8)
-                
-                co_table = QTableWidget()
-                co_table.setAlternatingRowColors(True)
-                co_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                co_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-                co_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-                co_table.setColumnCount(5)
-                co_table.setHorizontalHeaderLabels(["Date", "Description", "Amount", "Approved By", "Notes"])
-                co_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-                co_table.verticalHeader().setVisible(False)
-                co_table.setMinimumHeight(180)
-                co_table.itemDoubleClicked.connect(lambda _item: self._open_selected_project_change_order())
-                self._project_change_order_table = co_table
-
-                co_btn_row = QHBoxLayout()
-                co_btn_row.setContentsMargins(0, 0, 0, 0)
-                co_btn_row.setSpacing(8)
-
-                co_reload = QPushButton("Reload Log")
-                co_reload.clicked.connect(self._load_project_change_order_log)
-                co_btn_row.addWidget(co_reload)
-
-                co_add = QPushButton("New Change Order")
-                co_add.clicked.connect(self._add_project_change_order_row)
-                co_btn_row.addWidget(co_add)
-
-                co_open = QPushButton("Open Selected")
-                co_open.clicked.connect(self._open_selected_project_change_order)
-                co_btn_row.addWidget(co_open)
-
-                co_delete = QPushButton("Delete Selected")
-                co_delete.clicked.connect(self._delete_project_change_order_row)
-                co_btn_row.addWidget(co_delete)
-                co_btn_row.addStretch(1)
-
-                co_layout.addLayout(co_btn_row)
-                co_layout.addWidget(co_table, 1)
-
-                co_markup_row = QHBoxLayout()
-                co_markup_row.setContentsMargins(0, 0, 0, 0)
-                self._project_co_markup_label = QLabel("CO Markup: -")
-                self._project_co_markup_label.setStyleSheet("font-weight: bold;")
-                co_markup_row.addWidget(self._project_co_markup_label)
-
-                self._project_co_markup_button = QPushButton("Set / Verify Markup")
-                self._project_co_markup_button.clicked.connect(
-                    lambda: (p := self._selected_parent_for_project_views()) and self._set_project_change_order_markup(p)
-                )
-                co_markup_row.addWidget(self._project_co_markup_button)
-                co_markup_row.addStretch(1)
-                co_layout.addLayout(co_markup_row)
-                
-                # Total Change Orders display
-                co_total_row = QHBoxLayout()
-                co_total_row.setContentsMargins(0, 0, 0, 0)
-                self._project_change_order_total_label = QLabel("Total Change Orders: $0.00")
-                self._project_change_order_total_label.setStyleSheet("font-weight: bold;")
-                co_total_row.addWidget(self._project_change_order_total_label)
-                co_total_row.addStretch(1)
-                co_layout.addLayout(co_total_row)
-                
-                # Add Change Order Log tab to the financials tabs widget
-                financials_tabs.addTab(co_page, "Change Orders")
+            layout.addWidget(table, 1)
         else:
             open_btn = QPushButton(button_text)
             open_btn.setObjectName("primaryButton")
@@ -9070,6 +10449,188 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         return page
+
+    def _build_project_change_orders_tab(self) -> QWidget:
+        """Build the project Change Orders tab with an embedded ChangeOrdersWidget."""
+        if not hasattr(self, "_project_view_status_labels"):
+            self._project_view_status_labels: Dict[str, QLabel] = {}
+
+        c = self.theme_colors
+        accent = c.get('accent', c.get('selection_bg', '#007ACC'))
+        accent_hover = c.get('accent_hover', accent)
+        button_text = c.get('button_text', '#ffffff')
+        input_border = c.get('input_border', c.get('panel_border', '#3e3e42'))
+        text_muted = c.get('text_muted', c.get('text_secondary', '#858585'))
+
+        page = QWidget()
+        page.setAutoFillBackground(True)
+        page.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        page.setStyleSheet(
+            f"QWidget {{ background-color: {c['window_bg']}; color: {c['text_primary']}; }}"
+        )
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        status_label = QLabel("Select a project to load this view.")
+        status_label.setWordWrap(True)
+        status_label.setObjectName("projectViewStatus_change_orders")
+        status_label.setStyleSheet(
+            f"color: {c['text_secondary']}; font-size: 11px; background: transparent;"
+        )
+        self._project_view_status_labels["change_orders"] = status_label
+        layout.addWidget(status_label)
+
+        # CO Markup row
+        markup_row = QHBoxLayout()
+        markup_row.setContentsMargins(0, 0, 0, 0)
+        markup_row.setSpacing(8)
+        co_markup_label = QLabel("CO Markup: -")
+        co_markup_label.setWordWrap(True)
+        co_markup_label.setStyleSheet(
+            f"color: {c['text_secondary']}; font-size: 11px; background: transparent;"
+        )
+        self._project_co_markup_label = co_markup_label
+        markup_row.addWidget(co_markup_label)
+
+        btn_style = (
+            f"QPushButton {{"
+            f"  background-color: {c['panel_bg']};"
+            f"  color: {c['text_primary']};"
+            f"  border: 1px solid {input_border};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px 12px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background-color: {c.get('button_hover', c['panel_bg'])};"
+            f"}}"
+            f"QPushButton:disabled {{"
+            f"  color: {text_muted};"
+            f"}}"
+        )
+        primary_btn_style = (
+            f"QPushButton {{"
+            f"  background-color: {accent};"
+            f"  color: {button_text};"
+            f"  border: 1px solid {accent};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px 12px;"
+            f"  font-weight: 600;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background-color: {accent_hover};"
+            f"}}"
+        )
+
+        co_markup_button = QPushButton("Set / Verify Markup")
+        co_markup_button.setEnabled(False)
+        co_markup_button.setStyleSheet(btn_style)
+        def _on_co_markup_click() -> None:
+            pp = self._selected_parent_for_project_views()
+            if pp is not None:
+                self._set_project_change_order_markup(Path(pp))
+        co_markup_button.clicked.connect(_on_co_markup_click)
+        self._project_co_markup_button = co_markup_button
+        markup_row.addWidget(co_markup_button)
+        markup_row.addStretch(1)
+        layout.addLayout(markup_row)
+
+        # Button row
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(8)
+        btn_save = QPushButton("Save")
+        btn_save.setStyleSheet(primary_btn_style)
+        btn_save.clicked.connect(self._save_project_change_orders_widget)
+        btn_reload = QPushButton("Reload")
+        btn_reload.setStyleSheet(btn_style)
+        btn_reload.clicked.connect(lambda: self._load_project_change_orders_widget(force_reload=True))
+        btn_row.addWidget(btn_save)
+        btn_row.addWidget(btn_reload)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        # Container for the ChangeOrdersWidget (lazy-loaded)
+        container = QVBoxLayout()
+        container.setContentsMargins(0, 0, 0, 0)
+        self._project_co_widget_container = container
+        layout.addLayout(container, 1)
+
+        return page
+
+    def _load_project_change_orders_widget(self, force_reload: bool = False) -> None:
+        """Load or reload the embedded ChangeOrdersWidget for the selected project."""
+        container = getattr(self, "_project_co_widget_container", None)
+        if container is None:
+            return
+
+        parent_path = self._selected_parent_for_project_views()
+        if not parent_path:
+            self._clear_project_co_widget()
+            return
+
+        active_workbook = self._get_active_workbook_path(parent_path)
+        if not active_workbook or not active_workbook.exists():
+            self._clear_project_co_widget()
+            return
+
+        schedule_path = active_workbook / "Schedule.csv"
+        if not schedule_path.exists():
+            self._clear_project_co_widget()
+            return
+
+        # Skip reload if same workbook and not forced
+        if (
+            not force_reload
+            and getattr(self, "_project_co_widget", None) is not None
+            and getattr(self, "_project_co_widget_workbook", None) == active_workbook
+        ):
+            return
+
+        self._clear_project_co_widget()
+
+        schedule_headers, schedule_rows = self._read_csv_table(schedule_path)
+        if not schedule_headers:
+            return
+
+        storage_path = self._ensure_project_change_order_storage(parent_path)
+        co_markup_cfg = self._get_project_change_order_markup_config(parent_path)
+        co_markup_pct = float(co_markup_cfg["rate_pct"])
+
+        widget = ChangeOrdersWidget(
+            active_workbook,
+            (schedule_headers, schedule_rows),
+            parent=None,
+            change_callback=None,
+            storage_path=storage_path,
+            ohp_rate_override=(co_markup_pct / 100.0),
+        )
+        widget.changes_made = False
+        widget.apply_theme(self.theme_colors)
+        container.addWidget(widget)
+        self._project_co_widget = widget
+        self._project_co_widget_workbook = active_workbook
+        self._refresh_project_change_order_markup_ui()
+
+    def _clear_project_co_widget(self) -> None:
+        """Remove the current embedded ChangeOrdersWidget."""
+        widget = getattr(self, "_project_co_widget", None)
+        if widget is not None:
+            widget.setParent(None)
+            widget.deleteLater()
+            self._project_co_widget = None
+        self._project_co_widget_workbook = None
+
+    def _save_project_change_orders_widget(self) -> None:
+        """Save the embedded ChangeOrdersWidget data."""
+        widget = getattr(self, "_project_co_widget", None)
+        if widget is None:
+            QMessageBox.information(self, "Project Details", "No change orders widget is loaded.")
+            return
+        widget.save_current_alternate_data()
+        widget.changes_made = True
+        widget.save_to_csv()
+        QMessageBox.information(self, "Project Change Orders", "Project change orders saved.")
 
     def _clear_project_view_table(self, view_key: str) -> None:
         table = getattr(self, "_project_view_tables", {}).get(view_key)
@@ -9114,6 +10675,118 @@ class MainWindow(QMainWindow):
                 return candidate
         return None
 
+    def _style_project_financials_table(self, table: QTableWidget, headers: List[str]) -> None:
+        if table is None or not headers:
+            return
+
+        desc_col_idx = self._get_header_index(headers, "Description")
+        count_col_idx = self._get_header_index(headers, "Count")
+        rate_col_idx = self._get_header_index(headers, "Rate")
+        total_col_idx = self._get_header_index(headers, "Total")
+        major_totals = {
+            "material total:",
+            "labor total:",
+            "hard cost total:",
+            "sub hard cost total:",
+            "bid total:",
+            "project total:",
+        }
+
+        palette = {
+            "table_bg": "#102033",
+            "card_bg": "#172c44",
+            "card_border": "#274362",
+            "muted_text": "#9db7cf",
+            "select_bg": "#2f70b6",
+            "select_text": "#f5f9ff",
+            "row_even": "#14293f",
+            "row_odd": "#12253a",
+            "row_total": "#1f3b58",
+            "row_major_bg": "#1f4667",
+            "row_major_total": "#2a5c87",
+            "row_sub_bg": "#1a334c",
+            "row_sub_total": "#244a6d",
+            "row_major_text": "#eaf3ff",
+            "row_sub_text": "#d7e8fb",
+            "row_text": "#d0e2f2",
+        }
+
+        table.setStyleSheet(
+            "QTableWidget {"
+            f" background-color: {palette['table_bg']};"
+            f" border: 1px solid {palette['card_border']};"
+            " border-radius: 10px;"
+            " gridline-color: transparent;"
+            f" selection-background-color: {palette['select_bg']};"
+            f" selection-color: {palette['select_text']};"
+            "}"
+            "QHeaderView::section {"
+            f" background: {palette['card_bg']};"
+            f" color: {palette['muted_text']};"
+            " border: 0px;"
+            f" border-right: 1px solid {palette['card_border']};"
+            f" border-bottom: 1px solid {palette['card_border']};"
+            " padding: 8px 10px;"
+            " font-size: 11px;"
+            " font-weight: 600;"
+            "}"
+            "QTableWidget::item {"
+            " padding: 6px 10px;"
+            " border: 0px;"
+            "}"
+        )
+
+        table.setAlternatingRowColors(False)
+        table.setWordWrap(False)
+        table.horizontalHeader().setVisible(False)
+        table.verticalHeader().setVisible(False)
+
+        for row in range(table.rowCount()):
+            desc_item = table.item(row, 0)
+            desc_text = desc_item.text().strip().lower() if desc_item else ""
+            is_major_total = desc_text in major_totals
+            is_subtotal = ("total:" in desc_text) and not is_major_total
+
+            if is_major_total:
+                row_bg = QColor(palette["row_major_bg"])
+                total_bg = QColor(palette["row_major_total"])
+                fg = QColor(palette["row_major_text"])
+                row_height = 34
+            elif is_subtotal:
+                row_bg = QColor(palette["row_sub_bg"])
+                total_bg = QColor(palette["row_sub_total"])
+                fg = QColor(palette["row_sub_text"])
+                row_height = 30
+            else:
+                row_bg = QColor(palette["row_even"]) if (row % 2 == 0) else QColor(palette["row_odd"])
+                total_bg = QColor(palette["row_total"])
+                fg = QColor(palette["row_text"])
+                row_height = 28
+
+            table.setRowHeight(row, row_height)
+
+            for col in range(table.columnCount()):
+                item = table.item(row, col)
+                if item is None:
+                    continue
+
+                bg = total_bg if total_col_idx is not None and col == total_col_idx else row_bg
+                if col in (count_col_idx, rate_col_idx):
+                    bg = QColor(palette["row_total"])
+
+                item.setBackground(bg)
+                item.setForeground(fg)
+
+                if col == desc_col_idx:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                elif col in (count_col_idx, rate_col_idx, total_col_idx):
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+
+                if col == 0 or is_major_total or is_subtotal:
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+
     def _load_project_detail_table(self, view_key: str, force_reload: bool = False) -> None:
         table = getattr(self, "_project_view_tables", {}).get(view_key)
         if table is None:
@@ -9152,9 +10825,13 @@ class MainWindow(QMainWindow):
         if view_key != "financials":
             table.setHorizontalHeaderLabels(headers)
         table.setRowCount(len(display_rows))
+        desc_col_idx = self._get_header_index(headers, "Description") if view_key == "financials" else None
         for row_idx, row in enumerate(display_rows):
             for col_idx in range(len(headers)):
                 cell_text = row[col_idx] if col_idx < len(row) else ""
+                if view_key == "financials" and desc_col_idx is not None and col_idx == desc_col_idx:
+                    # Project view mirrors workbook financials, but nomenclature should say Project.
+                    cell_text = re.sub(r"\bBid\b", "Project", str(cell_text), flags=re.IGNORECASE)
                 table.setItem(row_idx, col_idx, QTableWidgetItem(str(cell_text)))
 
         table.blockSignals(False)
@@ -9184,9 +10861,8 @@ class MainWindow(QMainWindow):
                 table.setColumnWidth(rate_col_idx, 150)
             if total_col_idx is not None:
                 table.setColumnWidth(total_col_idx, 170)
-            
-            self._load_project_change_order_log()
-            self._refresh_project_change_order_markup_ui()
+            self._style_project_financials_table(table, headers)
+            self._update_project_financials_dashboard()
 
     def _save_project_detail_table(self, view_key: str) -> None:
         table = getattr(self, "_project_view_tables", {}).get(view_key)
@@ -9781,7 +11457,27 @@ class MainWindow(QMainWindow):
         prev_idx = getattr(self, "_project_detail_prev_tab_index", 0)
         if prev_idx != tab_index and prev_idx < len(self._project_detail_tab_keys):
             prev_key = self._project_detail_tab_keys[prev_idx]
-            if prev_key in {"financials", "purchase_orders", "work_orders"}:
+            if prev_key == "change_orders":
+                co_widget = getattr(self, "_project_co_widget", None)
+                if co_widget is not None and co_widget.changes_made:
+                    reply = QMessageBox.question(
+                        self,
+                        "Unsaved Changes",
+                        "You have unsaved changes in Change Orders.\nSave before leaving?",
+                        QMessageBox.StandardButton.Save
+                        | QMessageBox.StandardButton.Discard
+                        | QMessageBox.StandardButton.Cancel,
+                    )
+                    if reply == QMessageBox.StandardButton.Save:
+                        self._save_project_change_orders_widget()
+                    elif reply == QMessageBox.StandardButton.Cancel:
+                        self._project_detail_tab_changing = True
+                        try:
+                            self.project_details_views.setCurrentIndex(prev_idx)
+                        finally:
+                            self._project_detail_tab_changing = False
+                        return
+            elif prev_key in {"financials", "purchase_orders", "work_orders"}:
                 dirty = getattr(self, "_project_view_dirty", {}).get(prev_key, False)
                 if dirty:
                     name = prev_key.replace("_", " ").title()
@@ -9809,7 +11505,9 @@ class MainWindow(QMainWindow):
 
         self._project_detail_prev_tab_index = tab_index
         view_key = self._project_detail_tab_keys[tab_index]
-        if view_key in {"financials", "purchase_orders", "work_orders"}:
+        if view_key == "change_orders":
+            self._load_project_change_orders_widget()
+        elif view_key in {"financials", "purchase_orders", "work_orders"}:
             self._load_project_detail_table(view_key)
 
     def _refresh_project_detail_view_tabs(self) -> None:
@@ -9832,6 +11530,7 @@ class MainWindow(QMainWindow):
                 lbl.setText("These tabs are available when viewing Projects.")
             for key in ("financials", "purchase_orders", "work_orders"):
                 self._clear_project_view_table(key)
+            self._clear_project_co_widget()
             self._refresh_project_change_order_markup_ui()
             return
 
@@ -9841,6 +11540,7 @@ class MainWindow(QMainWindow):
                 lbl.setText("Select a project to load this view.")
             for key in ("financials", "purchase_orders", "work_orders"):
                 self._clear_project_view_table(key)
+            self._clear_project_co_widget()
             self._refresh_project_change_order_markup_ui()
             return
 
@@ -9850,6 +11550,7 @@ class MainWindow(QMainWindow):
                 lbl.setText("No active workbook is set. Choose one from the Main tab Workbooks section.")
             for key in ("financials", "purchase_orders", "work_orders"):
                 self._clear_project_view_table(key)
+            self._clear_project_co_widget()
             self._refresh_project_change_order_markup_ui()
             return
 
@@ -9860,7 +11561,7 @@ class MainWindow(QMainWindow):
                 locked_name = str(info.get("locked_financials_csv", "")).strip() or "Locked_Financials.csv"
                 locked_path = parent_path / locked_name
                 if locked_path.exists() and locked_path.is_file():
-                    lbl.setText(f"Locked at promotion: {locked_name}. Change orders are tracked below.")
+                    lbl.setText(f"Locked at promotion: {locked_name}.")
                 else:
                     candidates = self._project_view_file_candidates(view_key)
                     found = next((name for name in candidates if (active_workbook / name).exists()), None)
@@ -9878,6 +11579,14 @@ class MainWindow(QMainWindow):
                     lbl.setText(f"Active workbook: {active_name}. Schedule.csv was not found.")
                 continue
 
+            if view_key == "change_orders":
+                schedule_exists = (active_workbook / "Schedule.csv").exists()
+                if schedule_exists:
+                    lbl.setText(f"Active workbook: {active_name}.")
+                else:
+                    lbl.setText(f"Active workbook: {active_name}. Schedule.csv was not found (required for change orders).")
+                continue
+
             candidates = self._project_view_file_candidates(view_key)
             found = next((name for name in candidates if (active_workbook / name).exists()), None)
             if found:
@@ -9890,7 +11599,9 @@ class MainWindow(QMainWindow):
         current_idx = self.project_details_views.currentIndex()
         if 0 <= current_idx < len(getattr(self, "_project_detail_tab_keys", [])):
             key = self._project_detail_tab_keys[current_idx]
-            if key in {"financials", "purchase_orders", "work_orders"}:
+            if key == "change_orders":
+                self._load_project_change_orders_widget()
+            elif key in {"financials", "purchase_orders", "work_orders"}:
                 self._load_project_detail_table(key)
 
     def _clear_details_panel(self):
@@ -9900,8 +11611,13 @@ class MainWindow(QMainWindow):
                     self.lbl_address, self.lbl_project_info, self.lbl_active_bid_total]:
             lbl.setText("-")
         self.lbl_status.setCurrentIndex(-1)
+        self.edit_job_number.clear()
+        self._job_number_override_used = False
+        self._apply_job_number_lock_state(False)
+        self._gc_override_used = False
+        self._apply_gc_lock_state(False)
         self.lbl_due.clear()
-        self.lbl_estimator.clearEditText()
+        self.lbl_estimator.clear()
         self.lbl_project_manager.clearEditText()
         self.lbl_proposal_type.setCurrentIndex(-1)
         self.gc_combo.setCurrentIndex(-1)
@@ -9916,6 +11632,8 @@ class MainWindow(QMainWindow):
             _phone_edit.clear()
         for _invite_edit in getattr(self, "invite_doc_edits", []):
             _invite_edit.clear()
+        for idx in range(len(getattr(self, "additional_poc_layouts", []))):
+            self._clear_additional_poc_selectors(idx)
         self.edit_address.clear()
         self.edit_project_info.clear()
         self.subfolder_list.clear()
@@ -9973,6 +11691,17 @@ class MainWindow(QMainWindow):
         info = self._read_parent_info_cached(p)
         self.lbl_type.setText(info.get("type", "bid" if self.current_category == "bids" else "project").capitalize())
         self.lbl_status.setCurrentText(self._normalize_status_for_current_category(str(info.get("status", ""))))
+        job_number = str(info.get("job_number", "") or "").strip()
+        self.edit_job_number.setText(job_number)
+        raw_job_lock = info.get("job_number_locked", bool(job_number))
+        if isinstance(raw_job_lock, str):
+            job_locked = raw_job_lock.strip().lower() in {"1", "true", "yes", "y", "on"}
+        else:
+            job_locked = bool(raw_job_lock)
+        if not job_number:
+            job_locked = False
+        self._job_number_override_used = False
+        self._apply_job_number_lock_state(job_locked)
         due_str = info.get("due_date", "")
         if due_str:
             try:
@@ -9986,13 +11715,8 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_due.clear()
         
-        # Populate and set estimator dropdown
-        self.lbl_estimator.clear()
-        self.lbl_estimator.addItems(self.estimators_list)
-        estimator_val = info.get("estimator", "")
-        if estimator_val and self.lbl_estimator.findText(estimator_val) < 0:
-            self.lbl_estimator.addItem(estimator_val)
-        self.lbl_estimator.setCurrentText(estimator_val)
+        estimator_val = str(info.get("estimator", "") or "").strip()
+        self.lbl_estimator.setText(estimator_val)
         
         # Populate and set project manager dropdown
         self.lbl_project_manager.clear()
@@ -10021,6 +11745,15 @@ class MainWindow(QMainWindow):
             _gc_extra.setCurrentText(parsed_gcs[idx] if idx < len(parsed_gcs) else "")
         for idx in range(len(getattr(self, "gc_combos", [self.gc_combo]))):
             self._on_gc_combo_selected(idx)
+        raw_gc_lock = info.get("gc_locked", bool(gc_val))
+        if isinstance(raw_gc_lock, str):
+            gc_locked = raw_gc_lock.strip().lower() in {"1", "true", "yes", "y", "on"}
+        else:
+            gc_locked = bool(raw_gc_lock)
+        if not gc_val:
+            gc_locked = False
+        self._gc_override_used = False
+        self._apply_gc_lock_state(gc_locked)
 
         # Set Point Of Contact dropdowns
         raw_pocs = info.get("pocs", [])
@@ -10033,6 +11766,18 @@ class MainWindow(QMainWindow):
         for idx, _poc in enumerate(getattr(self, "poc_combos", [self.poc_combo])):
             _poc.setCurrentText(parsed_pocs[idx] if idx < len(parsed_pocs) else "")
 
+        for idx in range(len(getattr(self, "additional_poc_layouts", []))):
+            self._clear_additional_poc_selectors(idx)
+        raw_additional = info.get("additional_pocs", [])
+        if isinstance(raw_additional, list):
+            for idx, entries in enumerate(raw_additional):
+                if idx >= len(getattr(self, "additional_poc_layouts", [])) or not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    val = str(entry or "").strip()
+                    if val:
+                        self._add_additional_poc_selector(idx, selected_name=val, mark_unsaved=False)
+
         raw_invite_docs = info.get("invite_docs", [])
         parsed_invite_docs: List[str] = []
         if isinstance(raw_invite_docs, list):
@@ -10041,6 +11786,7 @@ class MainWindow(QMainWindow):
             _invite.setText(parsed_invite_docs[idx] if idx < len(parsed_invite_docs) else "")
         for idx in range(len(getattr(self, "gc_combos", [self.gc_combo]))):
             self._update_gc_contact_details(idx)
+            self._refresh_additional_poc_options(idx)
         
         # Set proposal type dropdown
         proposal_val = info.get("proposal_type", "")
@@ -12967,9 +14713,7 @@ class MainWindow(QMainWindow):
             email_body = settings.value("quote_email_template", 
                 "Hello,\n\nPlease provide a quote for the items listed in the attached PDF.\n\nThank you,\nBid Team", type=str)
             
-            # Launch Outlook with bid name in subject
-            bid_prefix = f"{bid_name} - " if bid_name else ""
-            email_subject = f"Quote Request - {bid_prefix}{table_name} - {selected_vendor}"
+            email_subject = str(bid_name or "GORO Quote Request").strip()
             success = launch_outlook_with_pdf(
                 recipient_email=vendor_email,
                 subject=email_subject,
@@ -12979,7 +14723,7 @@ class MainWindow(QMainWindow):
             
             if success:
                 QMessageBox.information(self, "Success", 
-                    f"Email opened in Outlook for {selected_vendor}\n\n"
+                    f"Email opened in your default mail app for {selected_vendor}\n\n"
                     f"Email: {vendor_email}\n"
                     f"PDF: {attachment_pdf_path.name}")
                 
@@ -12996,7 +14740,7 @@ class MainWindow(QMainWindow):
                     )
             else:
                 QMessageBox.warning(self, "Error", 
-                    f"Could not launch Outlook. PDF saved to:\n{attachment_pdf_path}")
+                    f"Could not launch your default mail app. PDF saved to:\n{attachment_pdf_path}")
         
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to email quote:\n{str(e)}")
@@ -15190,6 +16934,7 @@ class MainWindow(QMainWindow):
                 self._apply_wood_door_formulas(table, headers, csv_data, active_path, tables_data)
                 self._recalculate_door_unit_costs_for_table(table, headers)
             elif "frame" in csv_path.stem.lower():
+                self._apply_frame_formulas(table, headers, active_path, tables_data)
                 self._recalculate_frame_unit_costs_for_table(table, headers)
 
             table.viewport().update()
@@ -18781,22 +20526,22 @@ class MainWindow(QMainWindow):
                 add_row_btn = QPushButton("Add Row")
                 add_row_btn.setFixedWidth(100)
                 
-                def add_admin_misc_row(table_ref=tbl):
+                def add_admin_misc_row(table_ref=tbl, _burry_col=burry_cost_col_idx, _sell_col=sell_col_idx):
                     try:
                         table_ref.blockSignals(True)
                         new_row = table_ref.rowCount()
                         table_ref.setRowCount(new_row + 1)
-                        if burry_cost_col_idx is not None:
+                        if _burry_col is not None:
                             burry_item = QTableWidgetItem("")
                             burry_item.setFlags(burry_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                             burry_item.setCheckState(Qt.CheckState.Checked)
-                            table_ref.setItem(new_row, burry_cost_col_idx, burry_item)
-                        if sell_col_idx is not None:
+                            table_ref.setItem(new_row, _burry_col, burry_item)
+                        if _sell_col is not None:
                             sell_item = QTableWidgetItem("")
                             sell_item.setFlags(sell_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                             sell_item.setBackground(QColor(60, 60, 60))
                             sell_item.setForeground(QColor(200, 200, 200))
-                            table_ref.setItem(new_row, sell_col_idx, sell_item)
+                            table_ref.setItem(new_row, _sell_col, sell_item)
                         table_ref.blockSignals(False)
                         if hasattr(table_ref, '_trigger_admin_misc_recalc'):
                             table_ref._trigger_admin_misc_recalc()  # type: ignore
@@ -18928,19 +20673,18 @@ class MainWindow(QMainWindow):
             _CALC_COL_ROLE = Qt.ItemDataRole.UserRole + 900
 
             class _CalcColumnDelegate(QStyledItemDelegate):
-                """Renders calculated columns with italic blue text."""
-                def __init__(self, fg_color, parent=None):
+                """Renders calculated columns with gray bg/fg matching hardware tab."""
+                def __init__(self, parent=None):
                     super().__init__(parent)
-                    self._fg = fg_color
 
                 def initStyleOption(self, option, index):
                     super().initStyleOption(option, index)
                     if option is not None and index.data(_CALC_COL_ROLE):
-                        option.font.setItalic(True)
-                        option.palette.setColor(option.palette.ColorRole.Text, self._fg)
+                        option.palette.setColor(option.palette.ColorRole.Text, QColor(200, 200, 200))
+                        option.palette.setColor(option.palette.ColorRole.Base, QColor(60, 60, 60))
                         option.palette.setColor(option.palette.ColorRole.HighlightedText, QColor(255, 255, 255))
 
-            _calc_delegate = _CalcColumnDelegate(QColor(100, 180, 255), schedule_table)
+            _calc_delegate = _CalcColumnDelegate(schedule_table)
 
             def set_read_only_cell(table, row, col, value, expected_headers=None):
                 if expected_headers:
@@ -18958,6 +20702,8 @@ class MainWindow(QMainWindow):
                 else:
                     item.setText(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item.setBackground(QColor(60, 60, 60))
+                item.setForeground(QColor(200, 200, 200))
                 item.setData(_CALC_COL_ROLE, True)
                 return previous_text != value
 
@@ -20445,7 +22191,7 @@ class MainWindow(QMainWindow):
             table_widget.setStyleSheet(
                 f"""
                 QTableWidget {{
-                    background-color: {dashboard_palette['analytics_bg']};
+                    background-color: {tc['input_bg']};
                     color: {tc['text_primary']};
                     gridline-color: {tc['gridline']};
                 }}
@@ -20458,7 +22204,6 @@ class MainWindow(QMainWindow):
                     font-weight: 600;
                 }}
                 QTableWidget::item {{
-                    background-color: {tc['input_bg']};
                     color: {tc['text_primary']};
                 }}
                 QTableWidget::item:selected {{
@@ -20645,6 +22390,11 @@ class MainWindow(QMainWindow):
                 elevation_col_idx = None
                 door_type_col_idx = None
                 frame_type_col_idx = None
+                material_type_col_idx = None
+                frame_material_col_idx = None
+                description_col_idx = None
+                sidelite_col_idx = None
+                sidelite2_col_idx = None
                 for idx, header in enumerate(schedule_headers_list):
                     header_lower = header.strip().lower()
                     if header_lower == "width":
@@ -20663,6 +22413,16 @@ class MainWindow(QMainWindow):
                         door_type_col_idx = idx + 1
                     elif header_lower == "frame type":
                         frame_type_col_idx = idx + 1
+                    elif header_lower == "material type":
+                        material_type_col_idx = idx + 1
+                    elif header_lower == "frame material":
+                        frame_material_col_idx = idx + 1
+                    elif header_lower == "description":
+                        description_col_idx = idx + 1
+                    elif header_lower == "sidelite":
+                        sidelite_col_idx = idx + 1
+                    elif header_lower == "sidelite 2":
+                        sidelite2_col_idx = idx + 1
                 
                 # Note: Door Cost, Door Labor, Frame Cost, Frame Labor, Hardware Cost, and Hardware Labor
                 # are the only locked columns in Schedule, and they are set as read-only by the
@@ -20671,7 +22431,7 @@ class MainWindow(QMainWindow):
                 
                 # Create toolbar with Send to Alternate button and other buttons
                 
-                if width_col_idx is not None or height_col_idx is not None or fire_rating_col_idx is not None or stc_col_idx is not None:
+                if width_col_idx is not None or height_col_idx is not None or fire_rating_col_idx is not None or stc_col_idx is not None or material_type_col_idx is not None or frame_material_col_idx is not None or description_col_idx is not None:
                     schedule_header_view = schedule_table_widget.horizontalHeader()
                     if schedule_header_view is None:
                         return
@@ -20714,6 +22474,36 @@ class MainWindow(QMainWindow):
                         btn_clean_stc.clicked.connect(
                             lambda _checked=False, col=stc_col_idx: self._clean_stc_column(
                                 schedule_table_widget, col, schedule_headers_list, mark_schedule_changed, csv_files
+                            )
+                        )
+
+                    btn_clean_material_type = None
+                    if material_type_col_idx is not None:
+                        btn_clean_material_type = QPushButton("Clean", header_viewport)
+                        btn_clean_material_type.setProperty("_full_text", "Clean")
+                        btn_clean_material_type.clicked.connect(
+                            lambda _checked=False, col=material_type_col_idx: self._clean_material_column(
+                                schedule_table_widget, col, schedule_headers_list, mark_schedule_changed, csv_files
+                            )
+                        )
+
+                    btn_clean_frame_material = None
+                    if frame_material_col_idx is not None:
+                        btn_clean_frame_material = QPushButton("Clean", header_viewport)
+                        btn_clean_frame_material.setProperty("_full_text", "Clean")
+                        btn_clean_frame_material.clicked.connect(
+                            lambda _checked=False, col=frame_material_col_idx: self._clean_material_column(
+                                schedule_table_widget, col, schedule_headers_list, mark_schedule_changed, csv_files
+                            )
+                        )
+
+                    btn_clean_description = None
+                    if description_col_idx is not None and width_col_idx is not None:
+                        btn_clean_description = QPushButton("Clean", header_viewport)
+                        btn_clean_description.setProperty("_full_text", "Clean")
+                        btn_clean_description.clicked.connect(
+                            lambda _checked=False, desc_col=description_col_idx, w_col=width_col_idx, sl_col=sidelite_col_idx, sl2_col=sidelite2_col_idx: self._clean_description_column(
+                                schedule_table_widget, desc_col, w_col, sl_col, sl2_col, schedule_headers_list, mark_schedule_changed, csv_files
                             )
                         )
 
@@ -20776,6 +22566,9 @@ class MainWindow(QMainWindow):
                             (btn_clean_height, height_col_idx),
                             (btn_clean_fire_rating, fire_rating_col_idx),
                             (btn_clean_stc, stc_col_idx),
+                            (btn_clean_material_type, material_type_col_idx),
+                            (btn_clean_frame_material, frame_material_col_idx),
+                            (btn_clean_description, description_col_idx),
                             (btn_plan_elevations, elevation_col_idx),
                             (btn_generate_door_types, door_type_col_idx),
                             (btn_generate_frame_types, frame_type_col_idx),
@@ -21205,6 +22998,9 @@ class MainWindow(QMainWindow):
             )
 
             def on_duplicate_row_clicked():
+                if schedule_table is None:
+                    QMessageBox.warning(schedule_widget, "Duplicate Row", "Schedule table is not available.")
+                    return
                 row = schedule_table.currentRow()
                 if row < 0:
                     QMessageBox.information(schedule_widget, "Duplicate Row", "Select a row first.")
@@ -28089,6 +29885,8 @@ class MainWindow(QMainWindow):
                 if target_col is None:
                     continue
 
+                if target_name is None:
+                    continue
                 is_editable = pull_targets.get(target_name, {}).get("editable", False)
 
                 item = frame_table.item(row_idx, target_col)
@@ -28679,7 +30477,7 @@ class MainWindow(QMainWindow):
                     unit_labor_item = QTableWidgetItem("")
                     table.setItem(row_idx, unit_labor_col, unit_labor_item)
                 if any_labor_inputs:
-                    unit_labor_item.setText(f"${field_load_val + field_labor_val:.2f}")
+                    unit_labor_item.setText(f"{field_load_val + field_labor_val:.2f}")
                 else:
                     unit_labor_item.setText("")
                 unit_labor_item.setFlags(unit_labor_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -28783,7 +30581,7 @@ class MainWindow(QMainWindow):
                     unit_labor_item = QTableWidgetItem("")
                     table.setItem(row_idx, unit_labor_col, unit_labor_item)
                 if any_labor_inputs:
-                    unit_labor_item.setText(f"${field_load_val + field_labor_val:.2f}")
+                    unit_labor_item.setText(f"{field_load_val + field_labor_val:.2f}")
                 else:
                     unit_labor_item.setText("")
                 unit_labor_item.setFlags(unit_labor_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -31063,6 +32861,247 @@ class MainWindow(QMainWindow):
                 self,
                 f"Clean {col_name}",
                 f"Successfully standardized {processed_count} cell(s)."
+            )
+
+    def _clean_material_column(self, table: QTableWidget, col: int, headers: List[str], change_callback, csv_files):
+        """Clean Material Type or Frame Material column values to standard abbreviations."""
+        col_name = headers[col].strip() if col < len(headers) else "Column"
+
+        valid_options = ["WD", "HM", "AL", "FRP", "HDPE", "SS", "GL"]
+
+        # Mapping of common raw values to standard abbreviations
+        material_map: dict[str, str] = {}
+        for keyword, abbrev in (
+            ("wood", "WD"), ("wd", "WD"),
+            ("hollow metal", "HM"), ("hm", "HM"), ("metal", "HM"), ("steel", "HM"), ("stl", "HM"),
+            ("aluminum", "AL"), ("aluminium", "AL"), ("al", "AL"), ("alum", "AL"),
+            ("frp", "FRP"), ("fiberglass", "FRP"),
+            ("hdpe", "HDPE"), ("plastic", "HDPE"),
+            ("stainless", "SS"), ("ss", "SS"),
+            ("glass", "GL"), ("gl", "GL"),
+        ):
+            material_map[keyword] = abbrev
+
+        def standardize_material(value: str) -> Optional[str]:
+            if not value or value.strip() in ('', '-'):
+                return None
+            cleaned = value.strip()
+            if cleaned in valid_options:
+                return cleaned
+            lower = cleaned.lower()
+            if lower in material_map:
+                return material_map[lower]
+            # Check partial matches
+            for keyword, abbrev in material_map.items():
+                if keyword in lower:
+                    return abbrev
+            return None
+
+        table.blockSignals(True)
+        processed_count = 0
+        unresolved: dict[str, list[int]] = {}
+
+        for r in range(table.rowCount()):
+            try:
+                item = table.item(r, col)
+                if item is None:
+                    continue
+                original = item.text()
+                if not original or original.strip() in ('', '-'):
+                    continue
+                standardized = standardize_material(original)
+                if standardized is not None:
+                    if standardized != original:
+                        item.setText(standardized)
+                        processed_count += 1
+                else:
+                    unresolved.setdefault(original, []).append(r + 1)
+            except Exception:
+                continue
+
+        table.blockSignals(False)
+
+        if unresolved:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"Unresolved {col_name} Values")
+            dlg.setMinimumWidth(600)
+            dlg.setMinimumHeight(400)
+
+            layout = QVBoxLayout(dlg)
+            layout.addWidget(QLabel("The following values could not be automatically standardized."))
+            layout.addWidget(QLabel("Please select the correct option for each:"))
+
+            scroll = QScrollArea()
+            scroll_widget = QWidget()
+            scroll_layout = QVBoxLayout(scroll_widget)
+
+            combos: dict[str, QComboBox] = {}
+            for original_value, row_list in sorted(unresolved.items()):
+                row_str = ", ".join(str(r) for r in row_list[:10])
+                if len(row_list) > 10:
+                    row_str += f" ... ({len(row_list)} total)"
+                label = QLabel(f"'{original_value}' (rows: {row_str}):")
+                combo = QComboBox()
+                combo.addItems(valid_options)
+                combo.setEditable(True)
+                combo.setCurrentText(valid_options[0])
+                scroll_layout.addWidget(label)
+                scroll_layout.addWidget(combo)
+                combos[original_value] = combo
+
+            scroll_layout.addStretch()
+            scroll.setWidget(scroll_widget)
+            scroll.setWidgetResizable(True)
+            layout.addWidget(scroll)
+
+            btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            btn_box.accepted.connect(dlg.accept)
+            btn_box.rejected.connect(dlg.reject)
+            layout.addWidget(btn_box)
+
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                table.blockSignals(True)
+                for original_value, combo in combos.items():
+                    selected = combo.currentText().strip()
+                    if selected:
+                        for row_idx in unresolved[original_value]:
+                            item = table.item(row_idx - 1, col)
+                            if item and item.text() == original_value:
+                                item.setText(selected)
+                                processed_count += 1
+                table.blockSignals(False)
+
+        if change_callback and processed_count > 0:
+            change_callback()
+
+        if processed_count > 0:
+            QMessageBox.information(
+                self,
+                f"Clean {col_name}",
+                f"Successfully standardized {processed_count} cell(s)."
+            )
+
+    def _clean_description_column(self, table: QTableWidget, desc_col: int, width_col: int,
+                                  sidelite_col: Optional[int], sidelite2_col: Optional[int],
+                                  headers: List[str], change_callback, csv_files):
+        """Clean Description column based on width, sidelite, and sidelite 2 values."""
+        col_name = "Description"
+
+        # Load valid description options from dropdown_options.csv
+        dropdown_csv_path = None
+        if csv_files:
+            workbook_dir = csv_files[0].parent
+            dropdown_csv_path = workbook_dir / "dropdown_options.csv"
+        if not dropdown_csv_path or not dropdown_csv_path.exists():
+            app_root = Path(__file__).parent
+            dropdown_csv_path = app_root / "dropdown_options.csv"
+
+        valid_options: list[str] = []
+        if dropdown_csv_path.exists():
+            try:
+                with open(dropdown_csv_path, 'r', encoding='utf-8-sig') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if 'DESCRIPTION' in row and row['DESCRIPTION'].strip():
+                            valid_options.append(row['DESCRIPTION'].strip())
+                valid_options = list(dict.fromkeys(valid_options))  # preserve order, dedupe
+            except Exception:
+                pass
+
+        if not valid_options:
+            valid_options = ['Single', 'Single SL', 'Single Dbl SL', 'EQ Pair', 'UNEQ Pair',
+                             'Pair SL', 'Pair Dbl SL']
+
+        def parse_width_inches(value: str) -> Optional[float]:
+            """Parse a width value like '4-0', '3-6', '5-0' into total inches."""
+            if not value or value.strip() in ('', '-'):
+                return None
+            cleaned = value.strip().replace(' ', '')
+            # Feet-inches format: e.g. 4-0, 3-6, 5-0
+            m = re.match(r'^(\d+)-(\d+)$', cleaned)
+            if m:
+                return int(m.group(1)) * 12 + int(m.group(2))
+            # Feet'inches format: e.g. 4'0
+            m = re.match(r"^(\d+)'(\d+)$", cleaned)
+            if m:
+                return int(m.group(1)) * 12 + int(m.group(2))
+            # Just inches
+            m = re.match(r'^(\d+)$', cleaned)
+            if m:
+                val = int(m.group(1))
+                if val > 12:
+                    return float(val)
+                return float(val) * 12
+            return None
+
+        def determine_description(width_text: str, sl_text: str, sl2_text: str) -> Optional[str]:
+            total_inches = parse_width_inches(width_text)
+            if total_inches is None:
+                return None
+
+            has_sl = bool(sl_text and sl_text.strip() and sl_text.strip() != '-')
+            has_sl2 = bool(sl2_text and sl2_text.strip() and sl2_text.strip() != '-')
+
+            # Up to 4'-0" (48 inches) = Single
+            if total_inches <= 48:
+                base = "Single"
+            # Up to 5'-0" (60 inches) = Unequal Pair
+            elif total_inches <= 60:
+                base = "UNEQ Pair"
+            # Over 5'-0" = EQ Pair
+            else:
+                base = "EQ Pair"
+
+            if has_sl and has_sl2:
+                return f"{base} Dbl SL"
+            elif has_sl:
+                return f"{base} SL"
+            return base
+
+        table.blockSignals(True)
+        processed_count = 0
+
+        for r in range(table.rowCount()):
+            try:
+                width_item = table.item(r, width_col)
+                width_text = width_item.text() if width_item else ""
+
+                sl_text = ""
+                if sidelite_col is not None:
+                    sl_item = table.item(r, sidelite_col)
+                    sl_text = sl_item.text() if sl_item else ""
+
+                sl2_text = ""
+                if sidelite2_col is not None:
+                    sl2_item = table.item(r, sidelite2_col)
+                    sl2_text = sl2_item.text() if sl2_item else ""
+
+                new_desc = determine_description(width_text, sl_text, sl2_text)
+                if new_desc is None:
+                    continue
+
+                desc_item = table.item(r, desc_col)
+                if desc_item is None:
+                    continue
+
+                original = desc_item.text()
+                if new_desc != original:
+                    desc_item.setText(new_desc)
+                    processed_count += 1
+
+            except Exception:
+                continue
+
+        table.blockSignals(False)
+
+        if change_callback and processed_count > 0:
+            change_callback()
+
+        if processed_count > 0:
+            QMessageBox.information(
+                self,
+                f"Clean {col_name}",
+                f"Successfully set {processed_count} description(s) based on width and sidelite data."
             )
 
     def _open_door_plan_elevations_dialog(self, table: QTableWidget, headers: List[str], change_callback, tables_data=None):

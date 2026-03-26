@@ -547,9 +547,9 @@ class HardwareGroupsWidget(QWidget):
             # Zero out LABOR
             labor_item = self.parts_table.item(row, 3)
             if labor_item:
-                labor_item.setText("$0.00")
+                labor_item.setText("0.00")
             else:
-                labor_item = QTableWidgetItem("$0.00")
+                labor_item = QTableWidgetItem("0.00")
                 labor_item.setFlags(labor_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 labor_item.setBackground(QColor(60, 60, 60))
                 labor_item.setForeground(QColor(200, 200, 200))
@@ -629,9 +629,9 @@ class HardwareGroupsWidget(QWidget):
         # Update LABOR column (with 2 decimal format)
         labor_item = self.parts_table.item(row, 3)
         if labor_item:
-            labor_item.setText(f"${total_labor:.2f}")
+            labor_item.setText(f"{total_labor:.2f}")
         else:
-            labor_item = QTableWidgetItem(f"${total_labor:.2f}")
+            labor_item = QTableWidgetItem(f"{total_labor:.2f}")
             labor_item.setFlags(labor_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             labor_item.setBackground(QColor(60, 60, 60))
             labor_item.setForeground(QColor(200, 200, 200))

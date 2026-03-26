@@ -1,11 +1,11 @@
-﻿"""Email utilities for GORO 1.0 - handles vendor quote emails via Outlook."""
+﻿"""Email utilities for GORO 1.0 - handles vendor quote emails via default mail client."""
 
-import subprocess
-import tempfile
 import re
+import webbrowser
 from pathlib import Path
 from typing import Optional, List
 import csv
+from urllib.parse import quote
 
 
 def load_vendor_contacts(vendors_contacts_csv: Path) -> dict:
@@ -55,49 +55,22 @@ def launch_outlook_with_pdf(
     bcc: str = ""
 ) -> bool:
     """
-    Launch Outlook with PDF attachment using Windows COM.
+    Launch the system default mail client with a pre-filled draft.
     
     Args:
         recipient_email: Email address of recipient
         subject: Email subject line
         body: Email body text
-        pdf_path: Path to PDF file to attach
+        pdf_path: Path to PDF file to attach (informational only for mailto clients)
         cc: Optional CC email addresses
         bcc: Optional BCC email addresses
     
     Returns:
         True if successful, False otherwise
     """
-    try:
-        import win32com.client
-        
-        outlook = win32com.client.Dispatch("Outlook.Application")
-        mail = outlook.CreateItem(0)  # 0 = MailItem
-        
-        mail.To = recipient_email
-        mail.Subject = subject
-        mail.Body = body
-        
-        if cc:
-            mail.CC = cc
-        if bcc:
-            mail.BCC = bcc
-        
-        # Add attachment
-        if pdf_path.exists():
-            mail.Attachments.Add(str(pdf_path.absolute()))
-        
-        mail.Display(False)  # Show the email composition window
-        return True
-        
-    except ImportError:
-        # pywin32 not installed, fallback to command line
-        return launch_outlook_via_shell(
-            recipient_email, subject, body, pdf_path, cc, bcc
-        )
-    except Exception as e:
-        print(f"Error launching Outlook: {e}")
-        return False
+    return launch_outlook_via_shell(
+        recipient_email, subject, body, pdf_path, cc, bcc
+    )
 
 
 def launch_outlook_via_shell(
@@ -109,27 +82,21 @@ def launch_outlook_via_shell(
     bcc: str = ""
 ) -> bool:
     """
-    Fallback: Launch Outlook via command line with file attachment.
-    Note: This method may have limitations with PDF attachment but still opens Outlook.
+    Launch the system default mail application using a mailto URL.
+    Note: mailto clients typically do not support automatic file attachments.
     """
     try:
-        # Build Outlook URL - note: attachments via mailto: have limited support
-        # This will open Outlook with email pre-filled, user can manually attach PDF
-        mailto_url = f"mailto:{recipient_email}?subject={subject}"
-        
+        mailto_url = f"mailto:{quote(recipient_email or '')}?subject={quote(subject or '')}"
+
         if cc:
-            mailto_url += f"&cc={cc}"
+            mailto_url += f"&cc={quote(cc)}"
         if bcc:
-            mailto_url += f"&bcc={bcc}"
-        
-        # URL encode the body text (basic encoding)
-        body_encoded = body.replace('\n', '%0D%0A').replace(' ', '%20')
-        mailto_url += f"&body={body_encoded}"
-        
-        # Try to open with Outlook
-        import webbrowser
+            mailto_url += f"&bcc={quote(bcc)}"
+
+        mailto_url += f"&body={quote(body or '')}"
+
         webbrowser.open(mailto_url)
-        
+
         return True
     except Exception as e:
         print(f"Error launching email: {e}")

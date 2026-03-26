@@ -1595,8 +1595,7 @@ class CombinedHardwareWidget(QWidget):
                 type=str,
             )
 
-            bid_prefix = f"{bid_name} - " if bid_name else ""
-            email_subject = f"Quote Request - {bid_prefix}Hardware - {selected_vendor}"
+            email_subject = str(bid_name or "GORO Quote Request").strip()
             success = launch_outlook_with_pdf(
                 recipient_email=vendor_email,
                 subject=email_subject,
@@ -1605,13 +1604,13 @@ class CombinedHardwareWidget(QWidget):
             )
 
             if not success:
-                QMessageBox.warning(self, "Error", f"Could not launch Outlook. PDF saved to:\n{pdf_path}")
+                QMessageBox.warning(self, "Error", f"Could not launch your default mail app. PDF saved to:\n{pdf_path}")
                 return
 
             QMessageBox.information(
                 self,
                 "Success",
-                f"Email opened in Outlook for {selected_vendor}\n\n"
+                f"Email opened in your default mail app for {selected_vendor}\n\n"
                 f"Email: {vendor_email}\n"
                 f"PDF: {pdf_path.name}",
             )
@@ -3066,9 +3065,9 @@ class CombinedHardwareWidget(QWidget):
             # Zero out LABOR
             labor_item = self.parts_table.item(row, 4)  # Column 4 is LABOR
             if labor_item:
-                labor_item.setText("$0.00")
+                labor_item.setText("0.00")
             else:
-                labor_item = QTableWidgetItem("$0.00")
+                labor_item = QTableWidgetItem("0.00")
                 labor_item.setFlags(labor_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 labor_item.setBackground(QColor(60, 60, 60))
                 labor_item.setForeground(QColor(200, 200, 200))
@@ -3141,9 +3140,9 @@ class CombinedHardwareWidget(QWidget):
         # Update LABOR column
         labor_item = self.parts_table.item(row, 4)  # Column 4 is LABOR
         if labor_item:
-            labor_item.setText(f"${total_labor:.2f}")
+            labor_item.setText(f"{total_labor:.2f}")
         else:
-            labor_item = QTableWidgetItem(f"${total_labor:.2f}")
+            labor_item = QTableWidgetItem(f"{total_labor:.2f}")
             labor_item.setFlags(labor_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             labor_item.setBackground(QColor(60, 60, 60))
             labor_item.setForeground(QColor(200, 200, 200))
