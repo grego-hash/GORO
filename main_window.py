@@ -20825,7 +20825,12 @@ class MainWindow(QMainWindow):
 
                 return allowances_total
 
-            def _get_excluded_burry_admin_misc_total():
+            def _get_excluded_burry_admin_misc_weighted_total():
+                """Return weighted cost (material + hours*labor_rate) for non-buried Admin/Misc rows.
+
+                Uses the same weighting the admin sell distribution uses so the
+                schedule and admin proportions stay consistent.
+                """
                 admin_tbl = None
                 admin_hdrs = None
                 for widget, csv_path, hdrs, _ in tables_data:
@@ -20841,11 +20846,13 @@ class MainWindow(QMainWindow):
                 if admin_tbl is None or admin_hdrs is None:
                     return 0.0
 
-                total_cost_col = self._get_header_index(admin_hdrs, "Total Cost")
+                material_total_col = self._get_header_index(admin_hdrs, "Material Total")
+                hours_total_col = self._get_header_index(admin_hdrs, "Hours Total")
                 burry_col = self._get_header_index(admin_hdrs, "Burry Cost")
-                if total_cost_col is None or burry_col is None:
+                if material_total_col is None or hours_total_col is None or burry_col is None:
                     return 0.0
 
+                labor_rate = _get_live_financials_labor_rate()
                 excluded_total = 0.0
                 for r in range(admin_tbl.rowCount()):
                     burry_item = admin_tbl.item(r, burry_col)
@@ -20857,8 +20864,11 @@ class MainWindow(QMainWindow):
                         is_checked = text in ("", "yes", "x", "1", "true", "checked")
 
                     if not is_checked:
-                        total_item = admin_tbl.item(r, total_cost_col)
-                        excluded_total += parse_money(total_item.text() if total_item else "") or 0.0
+                        mat_item = admin_tbl.item(r, material_total_col)
+                        hrs_item = admin_tbl.item(r, hours_total_col)
+                        mat = parse_money(mat_item.text() if mat_item else "") or 0.0
+                        hrs = parse_money(hrs_item.text() if hrs_item else "") or 0.0
+                        excluded_total += mat + (hrs * labor_rate)
 
                 return excluded_total
 
@@ -20870,8 +20880,8 @@ class MainWindow(QMainWindow):
                 labor_rate = _get_live_financials_labor_rate()
                 bid_total = _get_live_financials_bid_total()
                 allowances_total = _get_live_allowances_total()
-                excluded_burry_total = _get_excluded_burry_admin_misc_total()
-                distributable_bid = bid_total - allowances_total - excluded_burry_total
+                excluded_admin_weight = _get_excluded_burry_admin_misc_weighted_total()
+                distributable_bid = bid_total - allowances_total
 
                 row_sell_values = []
                 included_rows = []
@@ -20889,6 +20899,9 @@ class MainWindow(QMainWindow):
                         included_rows.append(r)
                         sell_sum += row_sell
 
+                # Include admin weight in denominator so admin rows also receive markup
+                total_weight = sell_sum + excluded_admin_weight
+
                 changed_any = False
                 schedule_table.blockSignals(True)
                 try:
@@ -20900,10 +20913,11 @@ class MainWindow(QMainWindow):
 
                     rounded_values = {}
                     for r in included_rows:
-                        raw_value = distributable_bid * (row_sell_values[r] / sell_sum)
+                        raw_value = distributable_bid * (row_sell_values[r] / total_weight)
                         rounded_values[r] = round(raw_value, 2)
 
-                    target_total = round(distributable_bid, 2)
+                    schedule_share = round(distributable_bid * (sell_sum / total_weight), 2)
+                    target_total = schedule_share
                     current_total = round(sum(rounded_values.values()), 2)
                     diff = round(target_total - current_total, 2)
                     if abs(diff) >= 0.01 and included_rows:
@@ -34161,9 +34175,33 @@ class MainWindow(QMainWindow):
                 tag = get_cell(col_opening_num)
                 qty = get_cell(col_count)
                 uom_val = get_cell(col_uom).upper()
-                width = get_cell(col_width)
-                height = get_cell(col_height)
-                label = get_cell(col_rating)
+
+                # Convert width/height to inches (numeric only, no symbol)
+                width_raw = get_cell(col_width)
+                if width_raw:
+                    width_in = self._parse_hm_inches(width_raw)
+                    if width_in is not None:
+                        width = str(int(width_in)) if width_in == int(width_in) else str(width_in)
+                    else:
+                        width = width_raw
+                else:
+                    width = ""
+
+                height_raw = get_cell(col_height)
+                if height_raw:
+                    height_in = self._parse_hm_inches(height_raw)
+                    if height_in is not None:
+                        height = str(int(height_in)) if height_in == int(height_in) else str(height_in)
+                    else:
+                        height = height_raw
+                else:
+                    height = ""
+
+                # Fire rating: extract number only (90m→90, 20m→20, NR→blank)
+                label_raw = get_cell(col_rating)
+                nums = re.findall(r'\d+', label_raw) if label_raw else []
+                label = nums[0] if nums else ""
+
                 location = get_cell(col_location)
                 hdwset = get_cell(col_hw_group)
                 phase = get_cell(col_phase)
