@@ -3,6 +3,7 @@
 import csv
 import ast
 import io
+import math
 import re
 import json
 import os
@@ -33398,7 +33399,8 @@ class MainWindow(QMainWindow):
         if total_bid and total_bid != "-":
             numeric = self._parse_financials_number(total_bid)
             if numeric:
-                total_bid = self._format_currency(numeric)
+                rounded_up = math.ceil(numeric)
+                total_bid = f"${rounded_up:,}"
 
         def get_estimator_contact_info(estimator_name: str) -> Tuple[str, str, str]:
             if not self.company_contacts_csv.exists():
