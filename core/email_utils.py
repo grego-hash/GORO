@@ -1,11 +1,18 @@
 ﻿"""Email utilities for GORO 1.0 - handles vendor quote emails via default mail client."""
 
+import os
 import re
 import webbrowser
 from pathlib import Path
 from typing import Optional, List
 import csv
 from urllib.parse import quote
+
+try:
+    import win32com.client as _win32com_client
+    HAS_WIN32COM = True
+except ImportError:
+    HAS_WIN32COM = False
 
 
 def load_vendor_contacts(vendors_contacts_csv: Path) -> dict:
@@ -55,25 +62,52 @@ def launch_outlook_with_pdf(
     bcc: str = ""
 ) -> bool:
     """
-    Launch the system default mail client with a pre-filled draft.
-    
-    Args:
-        recipient_email: Email address of recipient
-        subject: Email subject line
-        body: Email body text
-        pdf_path: Path to PDF file to attach (informational only for mailto clients)
-        cc: Optional CC email addresses
-        bcc: Optional BCC email addresses
-    
-    Returns:
-        True if successful, False otherwise
+    Launch Outlook with a pre-filled draft and the PDF attached.
+
+    Tries Outlook COM automation first (attaches the file automatically).
+    Falls back to a mailto URL (no attachment) if COM is unavailable.
     """
-    return launch_outlook_via_shell(
+    if HAS_WIN32COM:
+        try:
+            return _launch_outlook_com(
+                recipient_email, subject, body, pdf_path, cc, bcc
+            )
+        except Exception:
+            pass  # fall through to mailto
+
+    return _launch_mailto(
         recipient_email, subject, body, pdf_path, cc, bcc
     )
 
 
-def launch_outlook_via_shell(
+def _launch_outlook_com(
+    recipient_email: str,
+    subject: str,
+    body: str,
+    pdf_path: Path,
+    cc: str = "",
+    bcc: str = "",
+) -> bool:
+    """Create an Outlook MailItem via COM with the PDF attached."""
+    outlook = _win32com_client.Dispatch("Outlook.Application")
+    mail = outlook.CreateItem(0)  # olMailItem
+    mail.To = recipient_email or ""
+    mail.Subject = subject or ""
+    mail.Body = body or ""
+    if cc:
+        mail.CC = cc
+    if bcc:
+        mail.BCC = bcc
+
+    abs_path = os.path.abspath(str(pdf_path))
+    if os.path.isfile(abs_path):
+        mail.Attachments.Add(abs_path)
+
+    mail.Display(False)  # show in Outlook without modal block
+    return True
+
+
+def _launch_mailto(
     recipient_email: str,
     subject: str,
     body: str,
@@ -81,10 +115,7 @@ def launch_outlook_via_shell(
     cc: str = "",
     bcc: str = ""
 ) -> bool:
-    """
-    Launch the system default mail application using a mailto URL.
-    Note: mailto clients typically do not support automatic file attachments.
-    """
+    """Fallback: open a mailto URL (cannot attach files)."""
     try:
         mailto_url = f"mailto:{quote(recipient_email or '')}?subject={quote(subject or '')}"
 

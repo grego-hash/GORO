@@ -8,7 +8,9 @@ Allows users to save workbook snapshots as read-only milestones with options to:
 """
 
 import json
+import os
 import shutil
+import stat
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -29,6 +31,26 @@ def get_milestones_dir(workbook_path: Path) -> Path:
     milestones_dir = workbook_path / ".milestones"
     milestones_dir.mkdir(parents=True, exist_ok=True)
     return milestones_dir
+
+
+def _set_tree_readonly(folder: Path) -> None:
+    """Mark every file under *folder* as read-only."""
+    for f in folder.rglob('*'):
+        if f.is_file():
+            try:
+                f.chmod(f.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+            except Exception:
+                pass
+
+
+def _set_tree_writable(folder: Path) -> None:
+    """Remove the read-only flag from every file under *folder*."""
+    for f in folder.rglob('*'):
+        if f.is_file():
+            try:
+                f.chmod(f.stat().st_mode | stat.S_IWUSR)
+            except Exception:
+                pass
 
 
 def list_milestones(workbook_path: Path) -> List[Milestone]:
@@ -103,6 +125,9 @@ def create_milestone(workbook_path: Path, name: str, description: str = "") -> b
         with open(milestone_folder / "milestone.json", 'w', encoding='utf-8') as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
         
+        # Lock the snapshot so milestone files cannot be accidentally modified.
+        _set_tree_readonly(milestone_folder)
+        
         return True
     
     except Exception as e:
@@ -114,6 +139,8 @@ def delete_milestone(milestone: Milestone) -> bool:
     """Delete a milestone."""
     try:
         if milestone.milestone_path and milestone.milestone_path.exists():
+            # Remove read-only flags so shutil.rmtree can delete the files.
+            _set_tree_writable(milestone.milestone_path)
             shutil.rmtree(milestone.milestone_path)
             return True
         return False
@@ -151,15 +178,29 @@ def revert_to_milestone(workbook_path: Path, milestone: Milestone) -> bool:
             elif item.is_dir():
                 shutil.rmtree(item)
         
-        # Copy milestone contents back
+        # Copy milestone contents back (independent copies, milestone stays untouched)
         for item in milestone.milestone_path.iterdir():
             if item.name == 'milestone.json':
                 continue
             
+            dest = workbook_path / item.name
             if item.is_file():
-                shutil.copy2(item, workbook_path / item.name)
+                shutil.copy2(item, dest)
             elif item.is_dir():
-                shutil.copytree(item, workbook_path / item.name, dirs_exist_ok=True)
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+        
+        # Ensure the restored workbook files are writable (milestone copies
+        # inherit the read-only flag, but the live workbook must be editable).
+        for child in workbook_path.iterdir():
+            if child.name == '.milestones':
+                continue
+            if child.is_file():
+                try:
+                    child.chmod(child.stat().st_mode | stat.S_IWUSR)
+                except Exception:
+                    pass
+            elif child.is_dir():
+                _set_tree_writable(child)
         
         return True
     
@@ -195,6 +236,9 @@ def copy_milestone_to_new_workbook(milestone: Milestone, new_workbook_path: Path
                 shutil.copy2(item, new_workbook_path / item.name)
             elif item.is_dir():
                 shutil.copytree(item, new_workbook_path / item.name, dirs_exist_ok=True)
+        
+        # New workbook must be editable (milestone copies inherit read-only).
+        _set_tree_writable(new_workbook_path)
         
         return True
     
