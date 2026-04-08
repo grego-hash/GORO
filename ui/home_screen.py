@@ -87,6 +87,7 @@ class HomeScreen(QWidget):
         self.hero_layout.setSpacing(18)
 
         logo_container = QWidget()
+        logo_container.setStyleSheet("background: transparent;")
         logo_layout = QVBoxLayout(logo_container)
         logo_layout.setContentsMargins(0, 0, 0, 0)
         logo_layout.setSpacing(0)
@@ -94,6 +95,7 @@ class HomeScreen(QWidget):
 
         self.logo_label = QLabel()
         self.logo_label.setObjectName("logoLabel")
+        self.logo_label.setStyleSheet("background: transparent;")
         self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         from pathlib import Path

@@ -4,9 +4,9 @@ import sys
 import os
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, QTimer
-from PyQt6.QtGui import QIcon, QPalette, QColor
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import QSettings, QTimer, Qt
+from PyQt6.QtGui import QIcon, QPalette, QColor, QPixmap, QPainter, QFont
+from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 from core.constants import ORG_NAME, APP_NAME, APP_VERSION, APP_ID
 from app_controller import GOROApp
@@ -83,6 +83,59 @@ def _prompt_for_pending_export(parent, settings: QSettings, configured_root: Pat
     )
 
 
+def _create_splash(logo_path: Path) -> QSplashScreen:
+    """Build a 600x400 splash pixmap with the GORO logo and version text."""
+    width, height = 600, 400
+    text_color = QColor("#ffffff")
+
+    canvas = QPixmap(width, height)
+    canvas.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    # Draw logo centred in top portion
+    logo = QPixmap(str(logo_path))
+    if not logo.isNull():
+        logo_scaled = logo.scaled(
+            260, 260,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        lx = (width - logo_scaled.width()) // 2
+        ly = 40
+        painter.drawPixmap(lx, ly, logo_scaled)
+
+    # Version text below logo – use dark color so it's visible on any desktop
+    painter.setPen(QColor("#7a1a2e"))
+    font = QFont("Segoe UI", 14, QFont.Weight.Bold)
+    painter.setFont(font)
+    painter.drawText(
+        0, 320, width, 40,
+        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+        f"Version {APP_VERSION}",
+    )
+
+    # Loading text at bottom
+    font_small = QFont("Segoe UI", 10)
+    painter.setFont(font_small)
+    painter.setPen(QColor("#7a1a2e"))
+    painter.drawText(
+        0, 360, width, 30,
+        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+        "Loading…",
+    )
+
+    painter.end()
+
+    splash = QSplashScreen(canvas)
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+    splash.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+    splash.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    return splash
+
+
 def main():
     """Application entry point."""
     # Fix Qt plugin path issues on Windows
@@ -107,6 +160,12 @@ def main():
     app.setOrganizationName(ORG_NAME)
     app.setApplicationName(APP_NAME)
     app.setStyle("Fusion")
+
+    # --- Show splash screen immediately ---
+    logo_path = APP_ROOT / "assets" / "icons" / "goro_logo.png"
+    splash = _create_splash(logo_path)
+    splash.show()
+    app.processEvents()
     
     # Load theme from settings
     settings = QSettings(ORG_NAME, APP_NAME)
@@ -137,7 +196,13 @@ def main():
         app.setWindowIcon(QIcon(str(icon_path)))
 
     goro_app = GOROApp()
-    goro_app.show()
+
+    def _finish_splash():
+        splash.finish(goro_app.stacked_widget)
+        goro_app.show()
+
+    # Keep splash visible for 3 seconds, then show the main window
+    QTimer.singleShot(3000, _finish_splash)
 
     if data_root_state.using_fallback and data_root_state.configured_root is not None:
         _queue_fallback_export(settings, data_root_state.fallback_root, data_root_state.configured_root)
