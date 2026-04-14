@@ -160,7 +160,22 @@ class MainWindow(QMainWindow):
 
                     # Load a taskbar-specific icon if available.
                     taskbar_icon_path = get_asset_path("GORO_TASKBAR.ico")
-                    ico_path = str(taskbar_icon_path if taskbar_icon_path.exists() else icon_path)
+                    ico_path = str(taskbar_icon_path)
+
+                    # Try to load the taskbar icon first, fall back to regular icon if it fails
+                    hicon = None
+                    try:
+                        hicon = ctypes.windll.user32.LoadImageW(0, ico_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
+                    except Exception:
+                        pass
+
+                    # If taskbar icon failed to load, try the regular icon
+                    if not hicon:
+                        ico_path = str(icon_path)
+                        try:
+                            hicon = ctypes.windll.user32.LoadImageW(0, ico_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
+                        except Exception:
+                            pass
 
                     # Try to load an icon from file and assign it to the window (big + small).
                     # Note: Windows prefers .ico files here.
@@ -171,7 +186,6 @@ class MainWindow(QMainWindow):
                         WM_SETICON = 0x0080
                         ICON_SMALL = 0
                         ICON_BIG = 1
-                        hicon = ctypes.windll.user32.LoadImageW(0, ico_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
                         if hicon:
                             ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon)
                             ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon)
