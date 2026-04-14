@@ -20,8 +20,13 @@ _TEMPLATE_SUBDIRS = ("1.Bid Docs", "2.Quotes", "3.Proposals", "4.Workbooks")
 def _app_root() -> Path:
     """Return the application root directory (works in both dev and frozen builds)."""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
     return Path(__file__).resolve().parent.parent
+
+
+def app_root() -> Path:
+    """Return the application root directory for runtime and development."""
+    return _app_root()
 
 
 # ----------------------------

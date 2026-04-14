@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, QDate, QSettings, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap
 
 from core.constants import ORG_NAME, APP_NAME, APP_DISPLAY_NAME
-from core.models import get_paths, list_bids, list_projects
+from core.models import app_root, get_paths, list_bids, list_projects
 from core.utils import sanitize_name, parse_due_date
 
 
@@ -98,8 +98,7 @@ class HomeScreen(QWidget):
         self.logo_label.setStyleSheet("background: transparent;")
         self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        from pathlib import Path
-        logo_path = Path(__file__).resolve().parent.parent / "assets" / "icons" / "goro_logo.png"
+        logo_path = app_root() / "assets" / "icons" / "goro_logo.png"
         self._logo_source_pixmap = None
         if logo_path.exists():
             pixmap = QPixmap(str(logo_path))

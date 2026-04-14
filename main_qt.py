@@ -10,12 +10,12 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 from core.constants import ORG_NAME, APP_NAME, APP_VERSION, APP_ID
 from app_controller import GOROApp
-from core.models import export_data_root_changes, resolve_data_root_state
+from core.models import app_root, export_data_root_changes, resolve_data_root_state
 from core.theme_utils import get_palette_colors
 from core.update_utils import check_for_updates_on_startup
 
 
-APP_ROOT = Path(__file__).resolve().parent
+APP_ROOT = app_root()
 
 PENDING_EXPORT_FLAG = "data_root/pending_fallback_export"
 PENDING_EXPORT_SOURCE = "data_root/pending_fallback_source"

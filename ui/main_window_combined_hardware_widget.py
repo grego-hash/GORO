@@ -448,6 +448,24 @@ class CombinedHardwareWidget(QWidget):
             if not str(row[part_id_idx]).strip():
                 row[part_id_idx] = self._generate_part_id()
 
+        # Ensure Prep Code column exists (older workbooks may lack it)
+        prep_code_idx = self._get_header_index(self.hardware_all_headers, "Prep Code")
+        if prep_code_idx is None:
+            # Insert after Category column if possible, otherwise append
+            cat_idx = self._get_header_index(self.hardware_all_headers, "Category")
+            if cat_idx is not None:
+                insert_at = cat_idx + 1
+                self.hardware_all_headers.insert(insert_at, "Prep Code")
+                for row in self.hardware_all_rows:
+                    row.insert(insert_at, "")
+                # Adjust part_id_idx since we shifted columns
+                part_id_idx = self._get_header_index(self.hardware_all_headers, "Part ID")
+                self.hardware_part_id_col_idx = part_id_idx
+            else:
+                self.hardware_all_headers.append("Prep Code")
+                for row in self.hardware_all_rows:
+                    row.append("")
+
         # Ensure _config_data hidden column exists for configurator metadata
         cfg_idx = self._get_header_index(self.hardware_all_headers, "_config_data")
         if cfg_idx is None:

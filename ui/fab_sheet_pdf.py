@@ -482,7 +482,22 @@ def _draw_page(
     card_gap = 8
     left_card_w = USABLE_W * 0.62
     right_card_w = USABLE_W - left_card_w - card_gap
-    card_h = 76
+
+    # Compute card height: use two columns for details if > 6 entries
+    door_details = first.door_details if first else {}
+    detail_line_h = 8
+    detail_top_offset = 28  # space for title
+    detail_bottom_pad = 8
+    detail_items = list(door_details.items())
+    num_details = len(detail_items)
+    use_two_cols = num_details > 6
+    if use_two_cols:
+        rows_per_col = (num_details + 1) // 2  # ceil division
+    else:
+        rows_per_col = num_details
+    min_card_h = 76
+    needed_details_h = detail_top_offset + rows_per_col * detail_line_h + detail_bottom_pad
+    card_h = max(min_card_h, needed_details_h)
 
     # Project summary card
     c.setStrokeColorRGB(*C_BORDER)
@@ -538,13 +553,18 @@ def _draw_page(
     c.drawString(details_x + 8, y - 16, "DOOR TAB DETAILS")
     c.setFont("Helvetica", 6.5)
     c.setFillColorRGB(*C_VALUE)
-    door_details = first.door_details if first else {}
     dy = y - 28
-    for label_text, val in door_details.items():
-        c.drawString(details_x + 8, dy, f"{label_text}: {val}")
-        dy -= 8
-        if dy < y - card_h + 8:
-            break
+    if use_two_cols:
+        col2_x = details_x + right_card_w * 0.5
+        for i, (label_text, val) in enumerate(detail_items):
+            if i < rows_per_col:
+                c.drawString(details_x + 8, dy - i * detail_line_h, f"{label_text}: {val}")
+            else:
+                c.drawString(col2_x, dy - (i - rows_per_col) * detail_line_h, f"{label_text}: {val}")
+    else:
+        for label_text, val in detail_items:
+            c.drawString(details_x + 8, dy, f"{label_text}: {val}")
+            dy -= detail_line_h
 
     # Horizontal separator
     y -= card_h + 10
@@ -651,6 +671,12 @@ def _draw_page(
     return next_idx
 
 
+def _wrap_text(text: str, font_name: str, font_size: float, max_width: float) -> list[str]:
+    """Split *text* into lines that fit within *max_width*."""
+    from reportlab.lib.utils import simpleSplit
+    return simpleSplit(text, font_name, font_size, max_width)
+
+
 def _draw_section(
     c: Canvas,
     title: str,
@@ -669,20 +695,37 @@ def _draw_section(
     c.drawString(x + 4, y - LINE_H + 3, title)
     y -= LINE_H
 
-    # Rows
-    c.setFont("Helvetica", F_LABEL)
+    # Rows – wrap long values across multiple lines
+    font_name = "Helvetica"
+    c.setFont(font_name, F_LABEL)
+    val_x = x + w * 0.48
+    val_max_w = w * 0.52 - 8  # available width for value text
+    total_lines = 0
     for label, value in rows:
         y -= LINE_H
+        total_lines += 1
         c.setFillColorRGB(*C_LABEL)
         c.drawString(x + 4, y + 3, f"{label}:")
         c.setFillColorRGB(*C_VALUE)
-        c.drawString(x + w * 0.48, y + 3, str(value))
-        # Underline
+        val_str = str(value)
+        wrapped = _wrap_text(val_str, font_name, F_LABEL, val_max_w)
+        if not wrapped:
+            wrapped = [""]
+        c.drawString(val_x, y + 3, wrapped[0])
+        # Underline first line
         c.setStrokeColorRGB(0.88, 0.89, 0.92)
-        c.line(x + w * 0.48, y, x + w - 4, y)
+        c.line(val_x, y, x + w - 4, y)
+        # Draw continuation lines
+        for extra_line in wrapped[1:]:
+            y -= LINE_H
+            total_lines += 1
+            c.setFillColorRGB(*C_VALUE)
+            c.drawString(val_x, y + 3, extra_line)
+            c.setStrokeColorRGB(0.88, 0.89, 0.92)
+            c.line(val_x, y, x + w - 4, y)
 
     # Border
-    section_h = (len(rows) + 1) * LINE_H
+    section_h = (total_lines + 1) * LINE_H
     c.setStrokeColorRGB(*C_BORDER)
     c.setFillColorRGB(1, 1, 1)
     c.rect(x, y, w, section_h)

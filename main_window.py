@@ -38,7 +38,7 @@ from core.utils import (
     materialize_template, next_increment_name, parse_due_date, status_index,
     available_copy_name, copy_template, get_system, clamped_size
 )
-from core.models import Paths, get_paths, ensure_dirs, list_bids, list_projects, read_info, write_info, now_iso, default_data_root
+from core.models import Paths, app_root, get_paths, ensure_dirs, list_bids, list_projects, read_info, write_info, now_iso, default_data_root
 from core.offline import (
     apply_offline_changes,
     clear_offline_flag,
@@ -119,7 +119,7 @@ from ui.main_window_hardware_groups_widget import (
 from ui.main_window_management_widgets import CustomerWidget, MyCompanyWidget, VendorsWidget
 
 
-APP_ROOT = Path(__file__).resolve().parent
+APP_ROOT = app_root()
 
 
 
@@ -158,9 +158,12 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
 
+                    # Load a taskbar-specific icon if available.
+                    taskbar_icon_path = APP_ROOT / "assets" / "icons" / "GORO_TASKBAR.ico"
+                    ico_path = str(taskbar_icon_path if taskbar_icon_path.exists() else icon_path)
+
                     # Try to load an icon from file and assign it to the window (big + small).
-                    # Note: Windows prefers .ico files here. If you have a PNG, convert to .ico
-                    # for best results when pinned to the taskbar.
+                    # Note: Windows prefers .ico files here.
                     try:
                         hwnd = int(self.winId())
                         LR_LOADFROMFILE = 0x00000010
@@ -168,7 +171,6 @@ class MainWindow(QMainWindow):
                         WM_SETICON = 0x0080
                         ICON_SMALL = 0
                         ICON_BIG = 1
-                        ico_path = str(icon_path)
                         hicon = ctypes.windll.user32.LoadImageW(0, ico_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
                         if hicon:
                             ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon)
@@ -24712,7 +24714,7 @@ class MainWindow(QMainWindow):
             def _open_fab_sheets(*, _sd=schedule_data, _ha=hardware_all_data, _hg=hardware_groups_data, _ap=active_path):
                 from ui.fab_sheet_builder import build_fab_sheets, _enrich_from_door_tables
                 from ui.fab_sheet_dialog import FabSheetDialog
-                sheets = build_fab_sheets(_sd[0], _sd[1], _ha[0], _ha[1], _hg[0], _hg[1])
+                sheets = build_fab_sheets(_sd[0], _sd[1], _hg[0], _hg[1], _ha[0], _ha[1])
                 if _ap:
                     _enrich_from_door_tables(sheets, _ap.parent if _ap.suffix else _ap)
                 if not sheets:
