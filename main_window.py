@@ -38,7 +38,7 @@ from core.utils import (
     materialize_template, next_increment_name, parse_due_date, status_index,
     available_copy_name, copy_template, get_system, clamped_size
 )
-from core.models import Paths, app_root, get_paths, ensure_dirs, list_bids, list_projects, read_info, write_info, now_iso, default_data_root
+from core.models import Paths, app_root, get_asset_path, get_paths, ensure_dirs, list_bids, list_projects, read_info, write_info, now_iso, default_data_root
 from core.offline import (
     apply_offline_changes,
     clear_offline_flag,
@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1, 1)
         
         # Set window icon
-        icon_path = APP_ROOT / "assets" / "icons" / "GORO_LOGO.ico"
+        icon_path = get_asset_path("GORO_LOGO.ico")
         if icon_path.exists():
             icon = QIcon(str(icon_path))
             self.setWindowIcon(icon)
@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
                         pass
 
                     # Load a taskbar-specific icon if available.
-                    taskbar_icon_path = APP_ROOT / "assets" / "icons" / "GORO_TASKBAR.ico"
+                    taskbar_icon_path = get_asset_path("GORO_TASKBAR.ico")
                     ico_path = str(taskbar_icon_path if taskbar_icon_path.exists() else icon_path)
 
                     # Try to load an icon from file and assign it to the window (big + small).
@@ -27495,7 +27495,7 @@ class MainWindow(QMainWindow):
                 pdf.rect(logo_box_x, block_y, logo_box_w, title_block_h)
                 _logo_path = Path.home() / ".goro" / "company_logo.png"
                 if not _logo_path.exists():
-                    _logo_path = APP_ROOT / "assets" / "icons" / "goro_logo.png"
+                    _logo_path = get_asset_path("goro_logo.png")
                 if _logo_path.exists():
                     try:
                         _logo = ImageReader(str(_logo_path))

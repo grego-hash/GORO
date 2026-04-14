@@ -29,6 +29,20 @@ def app_root() -> Path:
     return _app_root()
 
 
+def get_asset_path(asset_filename: str) -> Path:
+    """Get the full path to a bundled asset file.
+    
+    In frozen builds (PyInstaller), assets are bundled at the root of sys._MEIPASS.
+    In dev builds, assets are in assets/icons/ relative to the project root.
+    """
+    if getattr(sys, "frozen", False):
+        # Frozen: icons are at root of _MEIPASS (from goro.spec datas destination ".")
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent)) / asset_filename
+    else:
+        # Dev: icons are in assets/icons/
+        return Path(__file__).resolve().parent.parent / "assets" / "icons" / asset_filename
+
+
 # ----------------------------
 # Filesystem layout helpers
 # ----------------------------

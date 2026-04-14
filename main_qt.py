@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 from core.constants import ORG_NAME, APP_NAME, APP_VERSION, APP_ID
 from app_controller import GOROApp
-from core.models import app_root, export_data_root_changes, resolve_data_root_state
+from core.models import app_root, get_asset_path, export_data_root_changes, resolve_data_root_state
 from core.theme_utils import get_palette_colors
 from core.update_utils import check_for_updates_on_startup
 
@@ -162,7 +162,7 @@ def main():
     app.setStyle("Fusion")
 
     # --- Show splash screen immediately ---
-    logo_path = APP_ROOT / "assets" / "icons" / "goro_logo.png"
+    logo_path = get_asset_path("goro_logo.png")
     splash = _create_splash(logo_path)
     splash.show()
     app.processEvents()
@@ -191,7 +191,7 @@ def main():
     app.setPalette(palette)
 
     # Use the .ico file for the application-level icon
-    icon_path = APP_ROOT / "assets" / "icons" / "GORO_LOGO.ico"
+    icon_path = get_asset_path("GORO_LOGO.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
